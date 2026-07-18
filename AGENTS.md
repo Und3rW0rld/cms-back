@@ -6,7 +6,7 @@
 
 The CMS is one application; each user's frontend (portfolio, blog, product page, etc.) is a separate application that consumes this API. The CMS does not render HTML — it serves JSON. Any frontend integrates against it independently.
 
-The core content unit is a **site** — a generic, publishable content unit. It can represent a portfolio, a personal blog, a product page, or anything else.
+The core content unit is a **site** — a generic, publishable content unit. A site contains **entries** — any content with its own page (posts, projects, series, etc.).
 
 **Core purpose:** allow any registered user to manage structured content through a UI, with draft/publish workflow, and expose the published version publicly via a read-only endpoint.
 
@@ -70,62 +70,97 @@ src/main/java/com/cms/
     │   ├── JwtAuthenticationFilter.java
     │   └── JwtProvider.java            # jjwt 0.12.x
     └── out/persistence/jpa/
-        ├── entity/UserEntity.java      # @Entity + UserDetails + Role enum
+        ├── entity/UserEntity.java      # @Entity + UserDetails + Role enum — to be refactored
         └── repository/UserJpaRepository.java
 ```
 
-- `UserEntity` implements `UserDetails` directly (intentional shortcut for early phase — to be refactored).
-- `Role` enum embedded in `UserEntity`: `ADMIN`, `EDITOR`, `VIEWER` — authority strings prefixed `ROLE_`.
+- `UserEntity` implements `UserDetails` directly (intentional shortcut — to be removed).
+- `Role` enum: `ADMIN`, `EDITOR` — `VIEWER` dropped. Authority strings prefixed `ROLE_`.
 - **`domain/` and `application/` packages do not exist yet.**
 - **No REST controllers exist yet.**
 - **`src/test/` does not exist yet.**
 
-### Planned next (from architecture doc, section 17)
+### Planned next (from architecture doc, section 16)
 In this order:
 1. Rewrite `V1__create_users_table.sql` as normalized user schema: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
 2. Update `UserEntity` — remove `UserDetails` implementation from the JPA entity
 3. JPA entity `SiteEntity` + Flyway migration `V2__create_sites_table.sql`
-4. MongoDB documents `SiteContentDocument` and `SitePostDocument`
-5. Domain ports (`domain/port/in/`, `domain/port/out/`)
-6. Use case implementations (`application/usecase/`)
-7. REST controllers: `AdminSiteController`, `AdminPostController`, `PublicSiteController`
+4. JPA entity `SiteEntryEntity` + Flyway migration `V3__create_site_entries_table.sql`
+5. MongoDB documents: `SiteDraftDocument`, `SitePublishedDocument`, `SiteEntryDraftDocument`, `SiteEntryPublishedDocument`
+6. Domain ports (`domain/port/in/`, `domain/port/out/`)
+7. Use case implementations (`application/usecase/`)
+8. REST controllers: `AuthController`, `CmsSiteController`, `CmsEntryController`, `PublicSiteController`
 
 ---
 
 ## Persistence strategy
 
-- **PostgreSQL**: identity (`users`), site metadata (`sites`). `ddl-auto: validate` — Hibernate does NOT manage schema; Flyway does.
-- **MongoDB**: editorial content split into two collections:
-  - `site_contents` — versioned site document with embedded cards for skills, jobs, projects, and post previews
-  - `site_posts` — one document per post, contains full markdown body; referenced from `site_contents` cards via `postId`
-- `site_publications` (publication history) is **explicitly out of scope** for now — omit it.
-- Flyway migrations live in `src/main/resources/db/migration/`. Naming: `V{n}__{description}.sql`.
+- **PostgreSQL**: identity (`users`), site and entry metadata (`sites`, `site_entries`). `ddl-auto: validate` — Hibernate does NOT manage schema; Flyway does.
+- **MongoDB**: editorial content in four collections:
+  - `site_drafts` — current draft per site (`content: {}` on create, `version` field for optimistic locking)
+  - `site_published` — published snapshot per site; deleted on unpublish
+  - `site_entry_drafts` — current draft per entry (`version` field)
+  - `site_entry_published` — published snapshot per entry; deleted on unpublish
+- Content is always `Map<String, Object>` — backend never interprets structure
+- `site_publications` (publication history) is **explicitly out of scope** for now
+- Flyway migrations live in `src/main/resources/db/migration/`. Naming: `V{n}__{description}.sql`
 
 ---
 
 ## Key design rules
 
 ### Identification
-- Sites are identified by **UUID only** — no slug. Public endpoint uses UUID.
-- Do not add slug-based lookup; that responsibility belongs to each user's own frontend.
+- Sites and entries are identified by **UUID only** — no slug.
+- Public endpoint uses UUID. Slug-based URLs are the frontend's responsibility.
+
+### Roles
+- `ADMIN` = access to `/admin/**` (future system operations)
+- `EDITOR` = manages own sites and entries via `/cms/**`
+- `VIEWER` is **dropped** until per-site collaboration exists
+
+### Status
+- `DRAFT | PUBLISHED` only — `ARCHIVED` is dropped
+- Both `sites` and `site_entries` use the same enum
+- Both tables have `CHECK (status IN ('DRAFT','PUBLISHED'))`
 
 ### Multi-user isolation
-- Each site has an `ownerUserId`. Use case implementations must validate ownership — a user must never read or write another user's site, regardless of role.
-- `GET /admin/sites` must return only sites owned by the authenticated user, never all sites in the system.
+- Each site has `ownerUserId`. Use cases must validate ownership — never rely on auth alone.
+- `GET /cms/sites` returns only the authenticated user's sites.
 
 ### Draft/publish workflow
-- Every site has one active draft in MongoDB. Saving never auto-publishes.
-- `POST /admin/sites/{id}/publish` snapshots the draft as the published version.
-- The public endpoint always serves the published version, never the draft.
-- Draft and published version coexist in `site_contents` distinguished by `version` number.
-- Posts have their own independent draft/publish lifecycle via `published` flag on `site_posts`.
+- Every site and entry has one draft document. Saving never auto-publishes.
+- `POST /cms/sites/{id}/publish` copies draft content → published document.
+- Public endpoints always read published documents — never drafts.
+- `POST /cms/sites/{id}/unpublish` **deletes** the published document. `GET /public/sites/{id}` returns `404` until next publish.
+- On create: draft document is initialized with `content: {}`. `GET .../draft` always returns `200` if the resource exists.
 
-### Expandable content pattern
-- `site_contents` holds embedded **cards** (minimum data to render a list item).
-- Sections that need individual URLs, pagination, or independent publish use a **separate collection** and reference from the card by ID.
-- Currently separated: `site_posts` (via `postId` in card).
-- Future candidates: `site_projects` when individual project pages are needed.
-- To extend: create the new collection, add `{entity}Id` to the card, add endpoints. No other changes needed.
+### Optimistic locking on drafts
+- Draft documents have a `version: Long` field, incremented on every save.
+- `GET .../draft` response includes `version`; expose as `ETag` header.
+- `PUT .../draft` **requires** `If-Match` header with current version.
+- Returns `412 Precondition Failed` if versions do not match.
+- Applies to both `site_drafts` and `site_entry_drafts`.
+- Frontend 412 handling: show "Someone else saved changes — reload to continue."
+
+### Entry hierarchy (series)
+- Entries reference a parent via `parentId` (self-reference in `site_entries`).
+- Depth is unlimited — no 1-level restriction.
+- On every `PATCH .../entries/{id}` that sets `parentId`: use case walks the ancestor chain to detect cycles. Returns `400` if current entry appears in the chain.
+- `parentId` must reference an entry within the same site.
+
+### Delete behavior
+- `DELETE /cms/sites/{id}` — cascades: all `site_entries`, all 4 MongoDB document types.
+- `DELETE /cms/sites/{id}/entries/{entryId}` with no children — deletes entry + draft + published docs.
+- `DELETE /cms/sites/{id}/entries/{entryId}` with children — returns `409`. Caller must delete children first.
+
+### ?type filter — two-step query
+- `GET /public/sites/{id}/entries?type=post` queries PostgreSQL using index `(site_id, status, type)` → batch fetches MongoDB `site_entry_published` by the returned `entryId` list.
+- Do not attempt to filter by `type` directly in MongoDB — `type` lives in PostgreSQL.
+
+### contentSchema
+- `VARCHAR(100) NULL` on `sites`. Written by CMS UI (e.g. `"portfolio-v1"`).
+- Included in public response so the frontend can version its rendering logic.
+- Backend does not validate or interpret its value.
 
 ### API contracts
 - Public endpoints: `/public/sites/**` — no auth
@@ -133,17 +168,13 @@ In this order:
 - Auth endpoints: `/auth/**` — no auth required
 - Admin endpoints: `/admin/**` — reserved for future system-level operations
 - DTOs must be separate for public vs cms responses; never expose persistence documents directly
-- `live` field on `Project` must persist as `null`, not `"#"` — `null` means no URL
-- `Post.date` persists as `LocalDate`, serialize as `YYYY-MM-DD`
-- `Job.highlights`: min 2, max 4 recommended
-- MongoDB compound unique index: `(siteId, version)` on `site_contents`
-- MongoDB compound index: `(siteId, published)` on `site_posts`
+- Content is `Map<String, Object>` in both request and response — no typed section DTOs
 
 ### Public endpoint protection
-`GET /public/sites/{id}` is unauthenticated. Two mitigations are required before production:
+`GET /public/sites/{id}` is unauthenticated. Two mitigations required before production:
 
-- **Response caching** (Spring Cache + Caffeine): published content does not change until the next publish action — cache it. Evict on `POST /cms/sites/{id}/publish`. Migrate to Redis when running multiple instances.
-- **Rate limiting** (Bucket4j): ~20 req/s per IP on `/public/**`, return `429` when exceeded. In-memory to start, Redis-backed when scaling.
+- **Response caching** (Spring Cache + Caffeine): evict on publish and unpublish. Migrate to Redis for multiple instances.
+- **Rate limiting** (Bucket4j): ~20 req/s per IP on `/public/**`, return `429`. In-memory to start.
 
 ---
 
