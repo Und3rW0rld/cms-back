@@ -122,6 +122,12 @@ In this order:
 - `Job.highlights`: min 2, max 4 recommended
 - MongoDB compound unique index: `(portfolioId, version)` on `portfolio_contents`
 
+### Public endpoint protection
+`GET /public/portfolios/{id}` is unauthenticated. Two mitigations are required before production:
+
+- **Response caching** (Spring Cache + Caffeine): published content does not change until the next publish action — cache it. Evict on `POST /admin/portfolios/{id}/publish`. Migrate to Redis when running multiple instances.
+- **Rate limiting** (Bucket4j): ~20 req/s per IP on `/public/**`, return `429` when exceeded. In-memory to start, Redis-backed when scaling.
+
 ---
 
 ## Test profile

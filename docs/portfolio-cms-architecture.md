@@ -729,7 +729,49 @@ Do not add complex workflow until there is a real need for it.
 
 ---
 
-## 12. Image strategy
+## 12. Public endpoint protection
+
+`GET /public/portfolios/{id}` is an unauthenticated endpoint. Two mitigations must be implemented before production.
+
+### 12.1 Response caching — implement now
+
+Published content does not change until the next `publish` action. It is an ideal cache candidate.
+
+**Stack:** Spring Cache + Caffeine (in-memory). Migrate to Redis when running multiple instances.
+
+```java
+@Cacheable(value = "published-portfolio", key = "#id")
+public PublicPortfolioResponse getPublished(UUID id) { ... }
+```
+
+Cache invalidation: evict on `POST /admin/portfolios/{id}/publish`.
+
+```java
+@CacheEvict(value = "published-portfolio", key = "#id")
+public void publish(UUID id) { ... }
+```
+
+With caching in place, a flood of requests to the same portfolio hits memory, not the database.
+
+### 12.2 Rate limiting — implement now
+
+Limit requests per IP on all public endpoints. **Stack:** Bucket4j (in-memory to start, Redis-backed when scaling).
+
+Suggested limit: ~20 requests/second per IP on `/public/**`. Exceeding returns `429 Too Many Requests`.
+
+No external infrastructure required for the initial setup.
+
+### 12.3 UUID as passive obscurity — already in place
+
+UUID v4 has a search space of 2^122. Enumerating valid IDs by brute force is computationally infeasible, unlike sequential IDs or predictable slugs. Not a security measure on its own, but it reduces targeted scraping risk.
+
+### 12.4 CDN / reverse proxy — future
+
+Cloudflare or nginx in front of the API handles volumetric DDoS at the network level before requests reach Spring. Relevant when there is real traffic or a concrete attack. Out of scope for now.
+
+---
+
+## 13. Image strategy
 
 ### Phase 1
 - Store URLs only
