@@ -80,11 +80,13 @@ src/main/java/com/cms/
 
 ### Planned next (from architecture doc, section 16)
 In this order:
-1. JPA entity `PortfolioEntity` + Flyway migration `V2__create_portfolios_table.sql`
-2. MongoDB document `PortfolioContentDocument` (collection: `portfolio_contents`)
-3. Domain ports (`domain/port/in/`, `domain/port/out/`)
-4. Use case implementations (`application/usecase/`)
-5. REST controllers: `AdminPortfolioController`, `PublicPortfolioController`
+1. Rewrite `V1__create_users_table.sql` as normalized user schema: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
+2. Update `UserEntity` — remove `UserDetails` implementation from the JPA entity
+3. JPA entity `PortfolioEntity` + Flyway migration `V2__create_portfolios_table.sql`
+4. MongoDB document `PortfolioContentDocument` (collection: `portfolio_contents`)
+5. Domain ports (`domain/port/in/`, `domain/port/out/`)
+6. Use case implementations (`application/usecase/`)
+7. REST controllers: `AdminPortfolioController`, `PublicPortfolioController`
 
 ---
 

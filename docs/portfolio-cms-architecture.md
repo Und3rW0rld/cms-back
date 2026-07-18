@@ -374,8 +374,58 @@ AboutBlock
 
 ## 5.1 PostgreSQL: relational tables
 
-### Table `users`
-Already exists and correctly placed in PostgreSQL.
+### User identity schema
+
+The current `users` table is replaced by a normalized schema that supports local auth, OAuth2 social login, multiple roles per user, and flexible profile data. The old single-table approach had `password NOT NULL`, which cannot support OAuth users.
+
+```text
+users                          ← core identity, never grows
+- id           BIGSERIAL PK
+- email        VARCHAR(100) NOT NULL UNIQUE
+- name         VARCHAR(100) NOT NULL
+- enabled      BOOLEAN NOT NULL DEFAULT TRUE
+- created_at   TIMESTAMP NOT NULL
+- updated_at   TIMESTAMP NOT NULL
+
+roles                          ← role catalog
+- id           SERIAL PK
+- name         VARCHAR(50) NOT NULL UNIQUE  -- ADMIN | EDITOR | VIEWER
+
+user_roles                     ← many-to-many: a user can hold multiple roles
+- user_id      BIGINT NOT NULL FK users(id)
+- role_id      INT NOT NULL FK roles(id)
+- PK (user_id, role_id)
+
+user_credentials               ← local email/password login
+- user_id      BIGINT PK FK users(id)
+- password_hash VARCHAR(255) NOT NULL
+- created_at   TIMESTAMP NOT NULL
+
+user_oauth_providers           ← Google, GitHub, etc.
+- id           BIGSERIAL PK
+- user_id      BIGINT NOT NULL FK users(id)
+- provider     VARCHAR(30) NOT NULL   -- GOOGLE | GITHUB
+- provider_user_id VARCHAR(255) NOT NULL
+- created_at   TIMESTAMP NOT NULL
+- UNIQUE (provider, provider_user_id)
+
+user_profiles                  ← enriched profile data, evolves freely
+- user_id      BIGINT PK FK users(id)
+- last_name    VARCHAR(100) NULL
+- phone        VARCHAR(30) NULL
+- bio          TEXT NULL
+- avatar_url   VARCHAR(500) NULL
+- website      VARCHAR(255) NULL
+- metadata     JSONB NULL DEFAULT '{}'   ← free-form fields, no migration needed
+- updated_at   TIMESTAMP NOT NULL
+```
+
+**Why this split:**
+- `users` stays stable — only fields that exist for every user, always
+- `user_credentials` is absent for OAuth-only users; `user_oauth_providers` is absent for local-only users — no nullable hacks
+- `user_roles` supports multiple roles per user and future pricing/plan-based permission models without touching the schema
+- `user_profiles` separates identity from enriched data; `metadata JSONB` absorbs optional or experimental fields without Flyway migrations — promote to a column when a field becomes universal
+- All identity tables stay in PostgreSQL for strong relational integrity; MongoDB is reserved for editorial portfolio content only
 
 ### New table `portfolios`
 
@@ -788,7 +838,10 @@ Cloudflare or nginx in front of the API handles volumetric DDoS at the network l
 ## 13. Confirmed decisions
 
 ### Keep
-- `users` in PostgreSQL
+- Normalized user identity schema: `users`, `user_credentials`, `user_oauth_providers`, `user_roles`, `user_profiles`
+- Multiple roles per user via `user_roles` join table — supports future pricing/plan models
+- `user_profiles` with `metadata JSONB` for free-form profile fields without migrations
+- All identity and auth tables in PostgreSQL — no MongoDB for user data
 - Portfolio content in MongoDB
 - Public endpoints separate from admin endpoints
 - Separate DTOs for admin and public responses
@@ -797,6 +850,8 @@ Cloudflare or nginx in front of the API handles volumetric DDoS at the network l
 - Single API serving both CMS UI and portfolio frontends
 
 ### Avoid
+- `password NOT NULL` on `users` — breaks OAuth users
+- Merging local auth and OAuth identity into a single table with nullable hacks
 - Slug as identifier — use UUID only
 - Forcing all portfolio data into relational tables
 - Persisting `#` as a value for absent links — use `null`
@@ -804,13 +859,17 @@ Cloudflare or nginx in front of the API handles volumetric DDoS at the network l
 - Coupling frontends to the exact persistence structure
 - Implementing `portfolio_publications` until there is a concrete use case
 
+### Pending decisions
+- **OAuth2 social login** (Google, GitHub): schema is ready (`user_oauth_providers`). Implementation requires registering OAuth Apps, adding `spring-boot-starter-oauth2-client`, and writing the authorization code exchange endpoint. The email-as-identifier edge case must be resolved before implementing: if a user registers locally and then tries OAuth with the same email, decide whether to merge accounts or reject. Defer implementation until local auth is fully working.
+- **Pricing / plan tiers**: `user_roles` supports this already. When the time comes, add a `plans` table and either a `user_plan` column on `users` or a `user_plans` join table depending on whether a user can hold multiple plans simultaneously.
+
 ---
 
 ## 14. MVP
 
 ### Persistence
 - PostgreSQL:
-  - `users` (already exists)
+  - `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
   - `portfolios`
 - MongoDB:
   - `portfolio_contents`
@@ -853,9 +912,11 @@ Cloudflare or nginx in front of the API handles volumetric DDoS at the network l
 
 Implement in this order:
 
-1. Flyway migration `V2__create_portfolios_table.sql` — no `slug` column
-2. JPA entity `PortfolioEntity`
-3. MongoDB document `PortfolioContentDocument`
-4. Domain ports (`domain/port/in/`, `domain/port/out/`)
-5. Use cases: create portfolio, edit draft, publish, get public
-6. Controllers `AdminPortfolioController` and `PublicPortfolioController`
+1. Drop existing `V1__create_users_table.sql` and rewrite as the full normalized user schema: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
+2. Update `UserEntity` and related JPA entities to match the new schema; remove `UserDetails` implementation from the entity
+3. Flyway migration `V2__create_portfolios_table.sql` — no `slug` column
+4. JPA entity `PortfolioEntity`
+5. MongoDB document `PortfolioContentDocument`
+6. Domain ports (`domain/port/in/`, `domain/port/out/`)
+7. Use cases: create portfolio, edit draft, publish, get public
+8. Controllers `AdminPortfolioController` and `PublicPortfolioController`
