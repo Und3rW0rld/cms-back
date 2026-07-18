@@ -1,81 +1,101 @@
-# Arquitectura y modelo de datos propuesto para el CMS de portafolios
+# Architecture and data model — Portfolio CMS
 
 ## Checklist
 
-- [x] Definir el objetivo funcional del micro CMS
-- [x] Proponer una arquitectura alineada con la hexagonal ya presente
-- [x] Separar responsabilidades entre lectura pública, administración y persistencia
-- [x] Diseñar un modelo de datos compatible con `Photo`, `Fact`, `Skill`, `Job`, `Project` y `Post`
-- [x] Aterrizar la propuesta al stack actual: Spring Boot + PostgreSQL + MongoDB
-- [x] Dejar una guía concreta de endpoints, paquetes y evolución
+- [x] Define the functional goal of the CMS
+- [x] Propose an architecture aligned with the existing hexagonal structure
+- [x] Separate concerns between public reading, administration, and persistence
+- [x] Design a data model covering `Photo`, `Fact`, `Skill`, `Job`, `Project`, and `Post`
+- [x] Ground the proposal in the current stack: Spring Boot + PostgreSQL + MongoDB
+- [x] Define concrete endpoints, packages, and evolution path
+- [x] Confirm headless multi-user model
+- [x] Decide on UUID-only identification (no slug)
+- [x] Confirm draft/publish as a required workflow
+- [x] Drop `portfolio_publications` from initial scope
+- [x] Confirm single API serves both CMS UI and portfolio frontends
 
 ---
 
-## 1. Objetivo del sistema
+## Confirmed design decisions
 
-Este backend puede funcionar como un **headless CMS orientado a portafolios**. La idea no es solo guardar contenido, sino exponerlo de forma consistente para uno o varios frontends.
-
-En tu caso inicial, el primer consumidor será un **portafolio de desarrollador backend**, pero conviene diseñarlo como si mañana fueras a publicar otros perfiles o incluso otros tipos de portafolio.
-
-### Capacidades objetivo
-
-1. **Administrar contenido** desde endpoints privados.
-2. **Publicar contenido** listo para frontend mediante endpoints públicos.
-3. **Versionar o separar draft/published** para no romper el sitio mientras editas.
-4. **Reutilizar estructuras** comunes como imágenes, links, tags y bloques de texto.
-5. **Mantener flexibilidad** para cambiar secciones del portafolio sin rediseñar toda la base relacional.
+| Decision | Resolution |
+|---|---|
+| System type | Headless CMS API — serves JSON, not HTML |
+| Consumers | Two types: CMS UI (admin) + each user's own portfolio frontend (public) |
+| Deployment | Single API — no microservice split needed at this stage |
+| Users | Multi-user; anyone can register and manage their own content |
+| Public identification | UUID only — no slug. Each user's frontend is responsible for its own URLs |
+| Draft/publish | Required — saving never auto-publishes |
+| Publication history (`portfolio_publications`) | Out of scope for now |
+| User isolation | Each portfolio has `ownerUserId`; use cases must validate ownership |
+| Content storage | MongoDB — flexible schema, embedded per version |
+| Identity and metadata | PostgreSQL — strong integrity |
 
 ---
 
-## 2. Lectura del proyecto actual
+## 1. System objective
 
-Según la estructura actual del repositorio:
+This backend is a **multi-user headless CMS**. It acts as a content management layer for any frontend that wants to integrate against it. It does not render HTML — it delivers JSON.
 
-- Ya existe una base de **arquitectura hexagonal**.
-- Ya tienes **Spring Security + JWT** para la zona administrativa.
-- Ya existe persistencia híbrida con:
+The system serves **two types of consumers from a single API**:
+- **CMS UI** (admin frontend) — logs in, edits drafts, publishes content
+- **Portfolio frontends** (one per user) — reads the published version with no authentication
+
+The CMS and each portfolio frontend are separate applications. The CMS exposes an API; each user integrates their own frontend however they prefer.
+
+### Target capabilities
+
+1. **Register users** and authenticate them with JWT.
+2. **Manage content** from private, per-user endpoints.
+3. **Draft/publish** — edit without breaking what the frontend is already serving.
+4. **Expose published content** through public endpoints with no authentication.
+5. **Maintain schema flexibility** in MongoDB so different portfolios can have different sections.
+
+---
+
+## 2. Current project state
+
+- Hexagonal architecture base already exists.
+- Spring Security + JWT already in place for the admin zone.
+- Hybrid persistence already configured:
   - **PostgreSQL**
   - **MongoDB**
-- `users` ya vive en PostgreSQL.
+- `users` table already lives in PostgreSQL.
 
-Eso sugiere una decisión muy buena para este CMS:
-
-- usar **PostgreSQL para identidad, control, metadatos e integridad fuerte**
-- usar **MongoDB para el contenido editorial del portafolio**, porque sus secciones son más flexibles y documentales
+This confirms the right split for this CMS:
+- **PostgreSQL for identity, control, metadata, and strong integrity**
+- **MongoDB for editorial portfolio content**, because its sections are flexible and document-oriented
 
 ---
 
-## 3. Propuesta de arquitectura
+## 3. Architecture proposal
 
-## 3.1 Separación por dominios funcionales
+## 3.1 Functional domain split
 
-Te recomiendo dividir el sistema en 3 áreas conceptuales:
+The system divides into 3 conceptual areas:
 
 ### A. Identity & Access
-Responsable de:
-- usuarios CMS
-- autenticación JWT
-- roles (`ADMIN`, `EDITOR`, `VIEWER`)
+- CMS users
+- JWT authentication
+- Roles (`ADMIN`, `EDITOR`, `VIEWER`)
 
 ### B. Portfolio Management
-Responsable de:
-- portafolios
-- secciones del contenido
-- validaciones editoriales
-- estado draft/published
+- Portfolios
+- Content sections
+- Editorial validations
+- Draft/published state
 
 ### C. Public Content Delivery
-Responsable de:
-- endpoints públicos para frontend
-- payload optimizado para consumo
-- entrega de la versión publicada
+- Public endpoints for frontends
+- Payload optimized for consumption
+- Always serves the published version
 
 ---
 
-## 3.2 Arquitectura hexagonal aterrizada al caso
+## 3.2 Hexagonal architecture applied
 
-### Dominio
-Modelos y reglas de negocio:
+### Domain
+Business models and rules:
 - `Portfolio`
 - `PortfolioContent`
 - `Photo`
@@ -86,75 +106,69 @@ Modelos y reglas de negocio:
 - `Post`
 - `PublicationStatus`
 
-### Puertos de entrada
-Casos de uso como interfaces:
+### Input ports
+Use cases as interfaces:
 - `CreatePortfolioUseCase`
 - `UpdatePortfolioDraftUseCase`
 - `PublishPortfolioUseCase`
 - `GetPortfolioPublicUseCase`
 - `GetPortfolioAdminUseCase`
 
-### Aplicación
-Implementación de casos de uso:
-- orquesta validaciones
-- decide qué va a PostgreSQL y qué va a Mongo
-- controla publicación y versionado
+### Application layer
+Use case implementations:
+- Orchestrate validations
+- Decide what goes to PostgreSQL and what goes to MongoDB
+- Control publishing and versioning
 
-### Adaptadores de entrada
-- REST controllers admin
-- REST controllers public
-- autenticación JWT
+### Inbound adapters
+- Admin REST controllers
+- Public REST controllers
+- JWT authentication
 
-### Adaptadores de salida
-- repositorios JPA para metadatos relacionales
-- repositorios Mongo para contenido documental
-- futuro adaptador de storage si luego subes imágenes propias
+### Outbound adapters
+- JPA repositories for relational metadata
+- MongoDB repositories for document content
+- Future storage adapter if file uploads are added
 
 ---
 
-## 3.3 Estrategia recomendada de persistencia
-
-## Opción recomendada: modelo híbrido
+## 3.3 Persistence strategy
 
 ### PostgreSQL
-Guardar aquí lo que requiere:
-- unicidad fuerte
-- relaciones
-- auditoría simple
-- filtros administrativos
+Store here what requires:
+- Strong uniqueness
+- Relationships
+- Simple auditing
+- Administrative filtering
 
 ### MongoDB
-Guardar aquí lo que es:
-- contenido estructurado pero flexible
-- secciones embebidas
-- listas de skills, jobs, projects y posts
-- snapshots draft/published
-
-Esta opción encaja perfecto con tu stack actual y evita forzar el contenido editorial a muchas tablas relacionales innecesarias.
+Store here what is:
+- Structured but flexible content
+- Embedded sections
+- Lists of skills, jobs, projects, and posts
+- Draft/published snapshots
 
 ---
 
-## 4. Modelo de dominio recomendado
+## 4. Recommended domain model
 
-## 4.1 Aggregate principal: `Portfolio`
+## 4.1 Main aggregate: `Portfolio`
 
-`Portfolio` representa el portafolio como unidad publicable.
+`Portfolio` represents the portfolio as a publishable unit.
 
-### Responsabilidades
-- identidad del portafolio
-- dueño o autor
-- slug público
-- estado de publicación
-- referencia a la versión publicada
-- timestamps
+### Responsibilities
+- Portfolio identity (UUID)
+- Owner (`ownerUserId`)
+- Publication status
+- Reference to the published version
+- Timestamps
 
-### Propuesta conceptual
+### Conceptual model
 
 ```text
 Portfolio
 - id: UUID
 - ownerUserId: Long
-- slug: String
 - title: String
 - summary: String
 - status: DRAFT | PUBLISHED | ARCHIVED
@@ -164,15 +178,17 @@ Portfolio
 - updatedAt: Instant
 ```
 
-> `title` y `summary` son metadatos básicos. El contenido grande vive en Mongo.
+> No `slug` — portfolios are identified exclusively by UUID. The public URL is the responsibility of each user's frontend, not this API.
+
+> `title` and `summary` are basic metadata. All heavy content lives in MongoDB.
 
 ---
 
-## 4.2 Aggregate/documento: `PortfolioContent`
+## 4.2 Aggregate/document: `PortfolioContent`
 
-Este documento contiene el contenido editable real de una versión del portafolio.
+This document holds the actual editable content for a given portfolio version.
 
-### Propuesta conceptual
+### Conceptual model
 
 ```text
 PortfolioContent
@@ -190,17 +206,16 @@ PortfolioContent
 - updatedAt: Instant
 ```
 
-### Por qué conviene embebido
+### Why embedded
 
-Porque el frontend del portafolio normalmente necesita cargar casi todo el contenido en una sola consulta o en muy pocas. Además:
-
-- las listas no son masivas
-- todo pertenece al mismo aggregate visual
-- hay alta cohesión entre secciones
+Portfolio frontends typically need to load most content in a single query. Additionally:
+- Lists are not massive
+- Everything belongs to the same visual aggregate
+- High cohesion between sections
 
 ---
 
-## 4.3 Value Objects reutilizables
+## 4.3 Reusable value objects
 
 ### `Photo`
 
@@ -210,10 +225,10 @@ Photo
 - alt: String
 ```
 
-#### Reglas
-- `src` obligatorio
-- `alt` obligatorio
-- idealmente URL absoluta o path resuelto por un media service
+**Rules:**
+- `src` required
+- `alt` required
+- Ideally an absolute URL or path resolved by a media service
 
 ---
 
@@ -225,17 +240,16 @@ Fact
 - value: String
 ```
 
-#### Reglas
-- `label` corto y estable
-- si quieres consistencia interna, puedes guardar además un `key`
+**Rules:**
+- `label` short and stable
 
-Sugerencia futura:
+Future suggestion — add a `key` for internal consistency:
 
 ```text
 Fact
 - key: String   // location, experience, timezone
 - label: String // Location
-- value: String // Colombia 🇨🇴
+- value: String // Colombia
 ```
 
 ---
@@ -251,10 +265,10 @@ Skill
 - description: String
 ```
 
-#### Reglas
-- `slug` pensado para simple-icons
-- `fallbackIcon` opcional
-- `name + category` podría ser único dentro del mismo portafolio
+**Rules:**
+- `slug` intended for simple-icons
+- `fallbackIcon` optional
+- `name + category` could be unique within the same portfolio
 
 ---
 
@@ -271,10 +285,10 @@ Job
 - tech: List<String>
 ```
 
-#### Reglas
-- `highlights`: mínimo 2, recomendado máximo 4
-- `tech`: lista corta de tags
-- si luego quieres orden automático, agrega `order`
+**Rules:**
+- `highlights`: minimum 2, recommended maximum 4
+- `tech`: short list of tags
+- Add `order` later if automatic ordering is needed
 
 ---
 
@@ -291,12 +305,10 @@ Project
 - preview: String?
 ```
 
-#### Reglas
-- `github` obligatorio y válido
-- `live` mejor nullable en persistencia
-- el frontend puede convertir `null` a `#` si así lo necesita visualmente
-
-> A nivel de modelo es mejor `null` que guardar `#`, porque `#` no representa un recurso real.
+**Rules:**
+- `github` required and must be a valid URL
+- `live` nullable in persistence — the frontend can convert `null` to `#` if needed visually
+- Do not persist `#` — it does not represent a real resource
 
 ---
 
@@ -312,16 +324,14 @@ Post
 - banner: String?
 ```
 
-#### Reglas
-- `date` persistirlo como fecha real, no solo string
-- serializar como `YYYY-MM-DD`
-- `tags` con normalización opcional (`java`, `spring`, `architecture`)
+**Rules:**
+- `date` must persist as a real date, not just a string
+- Serialize as `YYYY-MM-DD`
+- `tags` must never be `null`, though an empty list is fine
 
 ---
 
-## 4.4 Bloques recomendados adicionales
-
-Aunque no los listaste explícitamente, para un portafolio real suele convenir agregar estos bloques desde el inicio.
+## 4.4 Additional recommended blocks
 
 ### `SeoBlock`
 
@@ -356,24 +366,23 @@ AboutBlock
 - facts: List<Fact>
 ```
 
-Esto evita que `Photo` y `Fact` queden huérfanos dentro del documento.
+`Photo` and `Fact` are always scoped to `AboutBlock` — they do not float as orphan objects.
 
 ---
 
-## 5. Modelo de persistencia recomendado
+## 5. Persistence model
 
-## 5.1 PostgreSQL: tablas relacionales
+## 5.1 PostgreSQL: relational tables
 
-### Tabla `users`
-Ya existe y está bien ubicada en PostgreSQL.
+### Table `users`
+Already exists and correctly placed in PostgreSQL.
 
-### Nueva tabla `portfolios`
+### New table `portfolios`
 
 ```text
 portfolios
 - id UUID PK
 - owner_user_id BIGINT NOT NULL FK users(id)
-- slug VARCHAR(120) NOT NULL UNIQUE
 - title VARCHAR(150) NOT NULL
 - summary VARCHAR(255) NULL
 - status VARCHAR(20) NOT NULL
@@ -383,23 +392,15 @@ portfolios
 - updated_at TIMESTAMP NOT NULL
 ```
 
-### Tabla opcional `portfolio_publications`
+> No `slug` column — portfolios are identified by UUID only.
 
-Útil si quieres histórico editorial.
+### Table `portfolio_publications` — **out of scope for now**
 
-```text
-portfolio_publications
-- id UUID PK
-- portfolio_id UUID NOT NULL FK portfolios(id)
-- version INT NOT NULL
-- published_by BIGINT NOT NULL FK users(id)
-- published_at TIMESTAMP NOT NULL
-- notes VARCHAR(255) NULL
-```
+Intentionally omitted. Do not add until there is a concrete use case.
 
-### Tabla opcional `media_assets`
+### Optional table `media_assets`
 
-Solo si más adelante subes imágenes al backend en vez de guardar URLs externas.
+Only if file uploads to the backend are added later, instead of storing external URLs.
 
 ```text
 media_assets
@@ -414,11 +415,11 @@ media_assets
 
 ---
 
-## 5.2 MongoDB: colección documental
+## 5.2 MongoDB: document collection
 
-### Colección `portfolio_contents`
+### Collection `portfolio_contents`
 
-Documento sugerido:
+Suggested document:
 
 ```json
 {
@@ -426,37 +427,31 @@ Documento sugerido:
   "version": 3,
   "seo": {
     "title": "Santiago Acevedo | Backend Developer",
-    "description": "Java, Spring Boot, arquitectura hexagonal y cloud",
-    "canonicalUrl": "https://tu-dominio.dev",
+    "description": "Java, Spring Boot, hexagonal architecture and cloud",
+    "canonicalUrl": "https://your-domain.dev",
     "ogImage": "https://cdn.example.com/og.png"
   },
   "hero": {
-    "greeting": "Hola, soy",
+    "greeting": "Hi, I'm",
     "name": "Santiago Acevedo",
     "tagline": "Backend developer building APIs, integrations and scalable systems.",
-    "primaryCtaLabel": "Ver proyectos",
+    "primaryCtaLabel": "View projects",
     "primaryCtaUrl": "/projects",
-    "secondaryCtaLabel": "Contactar",
+    "secondaryCtaLabel": "Contact",
     "secondaryCtaUrl": "/contact"
   },
   "about": {
     "title": "About me",
-    "description": "Desarrollador backend enfocado en Java, Spring y diseño de APIs.",
+    "description": "Backend developer focused on Java, Spring, and API design.",
     "photos": [
       {
         "src": "https://cdn.example.com/profile.jpg",
-        "alt": "Foto de perfil de Santiago Acevedo"
+        "alt": "Profile photo of Santiago Acevedo"
       }
     ],
     "facts": [
-      {
-        "label": "Location",
-        "value": "Colombia 🇨🇴"
-      },
-      {
-        "label": "Experience",
-        "value": "4+ years"
-      }
+      { "label": "Location", "value": "Colombia" },
+      { "label": "Experience", "value": "4+ years" }
     ]
   },
   "skills": [
@@ -485,7 +480,7 @@ Documento sugerido:
     {
       "name": "Event Stream Engine",
       "filename": "EventStreamEngine.java",
-      "description": "Motor para procesamiento de eventos de dominio.",
+      "description": "Engine for domain event processing.",
       "tech": ["Java", "Kafka", "Docker"],
       "github": "https://github.com/user/repo",
       "live": null,
@@ -496,7 +491,7 @@ Documento sugerido:
     {
       "title": "Designing hexagonal APIs",
       "date": "2026-06-18",
-      "excerpt": "Qué separar en dominio, aplicación y adaptadores.",
+      "excerpt": "What to separate into domain, application, and adapters.",
       "tags": ["architecture", "spring", "hexagonal"],
       "readTime": "8 min read",
       "banner": "https://cdn.example.com/post-banner.png"
@@ -507,60 +502,69 @@ Documento sugerido:
 }
 ```
 
-### Índices sugeridos en Mongo
+### Suggested MongoDB indexes
 
-- índice único compuesto: `(portfolioId, version)`
-- índice simple: `portfolioId`
-
----
-
-## 6. Decisión importante: embebidos vs colecciones separadas
-
-## Recomendación inicial
-
-Mantén `skills`, `jobs`, `projects` y `posts` **embebidos dentro de `portfolio_contents`**.
-
-### Ventajas
-- lectura muy rápida para el frontend
-- un solo documento representa una versión completa
-- fácil publicar un snapshot consistente
-- menos joins lógicos entre colecciones
-
-### Cuándo separar `posts`
-Si más adelante los posts crecen mucho o quieres:
-- paginación real
-- búsqueda full-text más avanzada
-- URLs individuales por post
-- borradores por post
-
-entonces sí conviene moverlos a una colección propia, por ejemplo `portfolio_posts`.
+- Compound unique index: `(portfolioId, version)`
+- Simple index: `portfolioId`
 
 ---
 
-## 7. Endpoints sugeridos
+## 6. Embedded vs separate collections
 
-## 7.1 Públicos
+## Initial recommendation
 
-### Obtener portafolio publicado completo
-`GET /public/portfolios/{slug}`
+Keep `skills`, `jobs`, `projects`, and `posts` **embedded inside `portfolio_contents`**.
 
-Devuelve la versión publicada lista para frontend.
+### Advantages
+- Very fast reads for the frontend
+- A single document represents a complete version
+- Easy to publish a consistent snapshot
+- No logical joins between collections
 
-### Obtener solo una sección
-Opcional si quieres optimización fina:
-- `GET /public/portfolios/{slug}/skills`
-- `GET /public/portfolios/{slug}/projects`
-- `GET /public/portfolios/{slug}/posts`
+### When to separate `posts`
+If posts grow significantly and you need:
+- Real pagination
+- More advanced full-text search
+- Individual post URLs
+- Per-post drafts
 
-> Empezaría con un endpoint agregado y solo separaría si realmente hace falta.
+Then move them to their own collection, e.g. `portfolio_posts`.
 
 ---
 
-## 7.2 Administrativos
+## 7. Endpoints
 
-### Portafolios
+## 7.1 Public
+
+### Get full published portfolio
+`GET /public/portfolios/{id}`
+
+Returns the published version ready for frontend consumption. No authentication required.
+
+> `id` is a UUID. There is no slug — each user's frontend is responsible for constructing friendly URLs from the UUID it receives from the API.
+
+### Get a single section (optional)
+Only if fine-grained optimization is needed:
+- `GET /public/portfolios/{id}/skills`
+- `GET /public/portfolios/{id}/projects`
+- `GET /public/portfolios/{id}/posts`
+
+> Start with the aggregated endpoint and only split if there is a real need.
+
+---
+
+## 7.2 Authentication
+
+- `POST /auth/register` — open registration
+- `POST /auth/login` — returns JWT
+
+---
+
+## 7.3 Admin
+
+### Portfolios
 - `POST /admin/portfolios`
-- `GET /admin/portfolios`
+- `GET /admin/portfolios` — **returns only portfolios owned by the authenticated user**, never all portfolios in the system
 - `GET /admin/portfolios/{id}`
 - `PATCH /admin/portfolios/{id}/metadata`
 
@@ -568,26 +572,25 @@ Opcional si quieres optimización fina:
 - `GET /admin/portfolios/{id}/draft`
 - `PUT /admin/portfolios/{id}/draft`
 
-### Publicación
+### Publishing
 - `POST /admin/portfolios/{id}/publish`
 - `POST /admin/portfolios/{id}/unpublish`
 
-### Media
-Más adelante, si agregas uploads:
+### Media (future)
 - `POST /admin/media`
 - `GET /admin/media`
 
 ---
 
-## 8. Contratos de respuesta recomendados
+## 8. Response contracts
 
-## 8.1 Respuesta pública
+## 8.1 Public response
 
-Conviene que el endpoint público entregue un payload orientado al frontend, por ejemplo:
+Frontend-oriented payload:
 
 ```json
 {
-  "slug": "santiago-acevedo",
+  "id": "b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a",
   "title": "Santiago Acevedo",
   "summary": "Backend Developer",
   "seo": {},
@@ -601,10 +604,9 @@ Conviene que el endpoint público entregue un payload orientado al frontend, por
 }
 ```
 
-## 8.2 Respuesta admin
+## 8.2 Admin response
 
-Puede incluir además:
-- `id`
+Includes additionally:
 - `status`
 - `currentDraftVersion`
 - `currentPublishedVersion`
@@ -612,59 +614,57 @@ Puede incluir además:
 
 ---
 
-## 9. Validaciones de negocio recomendadas
+## 9. Business validations
 
-## Portafolio
-- `slug` único
-- `title` obligatorio
-- solo usuarios `ADMIN` o `EDITOR` pueden editar
+### Portfolio
+- `title` required
+- Ownership: a user may only read or write their own portfolios — validate in the use case, not just in authentication
+- Only `ADMIN` or `EDITOR` roles may edit
 
-## Photos
-- `src` no vacío
-- `alt` obligatorio
+### Photos
+- `src` not blank
+- `alt` required
 
-## Skills
-- `name`, `slug`, `category`, `description` obligatorios
-- categoría restringida al enum
+### Skills
+- `name`, `slug`, `category`, `description` required
+- Category restricted to enum values
 
-## Jobs
-- `company`, `role`, `period`, `location` obligatorios
+### Jobs
+- `company`, `role`, `period`, `location` required
 - `highlights.size >= 2`
-- `highlights.size <= 4` recomendado
+- `highlights.size <= 4` recommended
 
-## Projects
-- `name`, `filename`, `description`, `github` obligatorios
-- `github` debe ser URL válida
+### Projects
+- `name`, `filename`, `description`, `github` required
+- `github` must be a valid URL
 - `live` nullable
 
-## Posts
-- `title`, `date`, `excerpt`, `readTime` obligatorios
-- `tags` nunca `null`, aunque sí puede ser lista vacía
+### Posts
+- `title`, `date`, `excerpt`, `readTime` required
+- `tags` must never be `null`, though an empty list is fine
 
 ---
 
-## 10. Estructura de paquetes sugerida
-
-Aterrizado a tu proyecto actual:
+## 10. Suggested package structure
 
 ```text
 src/main/java/com/cms/
 ├── domain/
 │   ├── model/
-│   │   ├── portfolio/
-│   │   │   ├── Portfolio.java
-│   │   │   ├── PortfolioContent.java
-│   │   │   ├── PublicationStatus.java
-│   │   │   ├── SeoBlock.java
-│   │   │   ├── HeroBlock.java
-│   │   │   ├── AboutBlock.java
-│   │   │   ├── Photo.java
-│   │   │   ├── Fact.java
-│   │   │   ├── Skill.java
-│   │   │   ├── SkillCategory.java
-│   │   │   ├── Job.java
-│   │   │   ├── Project.java
-│   │   │   └── Post.java
+│   │   └── portfolio/
+│   │       ├── Portfolio.java
+│   │       ├── PortfolioContent.java
+│   │       ├── PublicationStatus.java
+│   │       ├── SeoBlock.java
+│   │       ├── HeroBlock.java
+│   │       ├── AboutBlock.java
+│   │       ├── Photo.java
+│   │       ├── Fact.java
+│   │       ├── Skill.java
+│   │       ├── SkillCategory.java
+│   │       ├── Job.java
+│   │       ├── Project.java
+│   │       └── Post.java
 │   └── port/
 │       ├── in/
 │       │   ├── CreatePortfolioUseCase.java
@@ -681,108 +681,109 @@ src/main/java/com/cms/
 │       ├── UpdatePortfolioDraftService.java
 │       ├── PublishPortfolioService.java
 │       └── GetPortfolioPublicService.java
-├── adapters/
-│   ├── in/web/controller/
-│   │   ├── AdminPortfolioController.java
-│   │   └── PublicPortfolioController.java
-│   └── out/persistence/
-│       ├── jpa/
-│       │   ├── entity/
-│       │   │   └── PortfolioEntity.java
-│       │   ├── repository/
-│       │   │   └── PortfolioJpaRepository.java
-│       │   └── adapter/
-│       │       └── PortfolioPersistenceAdapter.java
-│       └── mongo/
-│           ├── document/
-│           │   └── PortfolioContentDocument.java
-│           ├── repository/
-│           │   └── PortfolioContentMongoRepository.java
-│           └── adapter/
-│               └── PortfolioContentPersistenceAdapter.java
+└── adapters/
+    ├── in/web/controller/
+    │   ├── AdminPortfolioController.java
+    │   └── PublicPortfolioController.java
+    └── out/persistence/
+        ├── jpa/
+        │   ├── entity/
+        │   │   └── PortfolioEntity.java
+        │   ├── repository/
+        │   │   └── PortfolioJpaRepository.java
+        │   └── adapter/
+        │       └── PortfolioPersistenceAdapter.java
+        └── mongo/
+            ├── document/
+            │   └── PortfolioContentDocument.java
+            ├── repository/
+            │   └── PortfolioContentMongoRepository.java
+            └── adapter/
+                └── PortfolioContentPersistenceAdapter.java
 ```
 
 ---
 
-## 11. Flujo editorial recomendado
+## 11. Editorial flow
 
-## Caso: edición y publicación
+### Edit and publish
 
-1. Un editor crea el portafolio en PostgreSQL.
-2. Se crea `version = 1` del contenido en Mongo como draft.
-3. El editor actualiza el draft desde `/admin/portfolios/{id}/draft`.
-4. Al publicar:
-   - se valida el documento completo
-   - se actualiza `currentPublishedVersion`
-   - el endpoint público empieza a servir esa versión
-5. Si luego editas de nuevo:
-   - puedes sobreescribir el draft actual
-   - o crear una nueva versión draft `published + 1`
+1. A user creates a portfolio in PostgreSQL.
+2. `version = 1` of the content is created in MongoDB as a draft.
+3. The user updates the draft via `PUT /admin/portfolios/{id}/draft`.
+4. On publish:
+   - The full document is validated
+   - `currentPublishedVersion` is updated
+   - The public endpoint starts serving that version
+5. On subsequent edits:
+   - Overwrite the current draft, or
+   - Create a new draft version at `publishedVersion + 1`
 
-## Recomendación práctica
+### Practical recommendation
 
-Empieza con el esquema más simple:
-- **1 draft activo por portafolio**
-- **1 versión publicada referenciada desde PostgreSQL**
+Start with the simplest scheme:
+- **1 active draft per portfolio**
+- **1 published version referenced from PostgreSQL**
 
-No agregues workflow complejo hasta que realmente lo necesites.
-
----
-
-## 12. Estrategia de imágenes
-
-Dado que tus estructuras ya usan `src`, mi recomendación inicial es:
-
-### Fase 1
-- guardar solo URLs
-- permitir CDN, Cloudinary, S3 o assets estáticos
-
-### Fase 2
-- agregar módulo `media`
-- subir archivo al backend
-- almacenar metadatos en `media_assets`
-- devolver una URL pública que luego se asigna a `Photo.src` o `Post.banner`
-
-Eso evita complejidad temprana sin cerrar la puerta a crecer.
+Do not add complex workflow until there is a real need for it.
 
 ---
 
-## 13. Decisiones recomendadas desde ya
+## 12. Image strategy
 
-## Mantener
-- `users` en PostgreSQL
-- contenido del portafolio en MongoDB
-- endpoints públicos separados de endpoints admin
-- DTOs específicos para admin y public
-- validaciones con Bean Validation + reglas de dominio
+### Phase 1
+- Store URLs only
+- Support CDN, Cloudinary, S3, or static assets
 
-## Evitar
-- meter todo el portafolio en tablas relacionales desde el inicio
-- usar `#` como valor persistido para links ausentes
-- exponer directamente documentos internos sin DTOs
-- acoplar el frontend a la estructura exacta de persistencia
+### Phase 2 (future)
+- Add `media` module
+- Upload file to the backend
+- Store metadata in `media_assets`
+- Return a public URL to be assigned to `Photo.src` or `Post.banner`
 
 ---
 
-## 14. MVP recomendado
+## 13. Confirmed decisions
 
-Si quieres iterar rápido, el MVP podría quedar así:
+### Keep
+- `users` in PostgreSQL
+- Portfolio content in MongoDB
+- Public endpoints separate from admin endpoints
+- Separate DTOs for admin and public responses
+- Bean Validation + domain rule validations
+- Draft/publish workflow — saving never auto-publishes
+- Single API serving both CMS UI and portfolio frontends
 
-### Persistencia
+### Avoid
+- Slug as identifier — use UUID only
+- Forcing all portfolio data into relational tables
+- Persisting `#` as a value for absent links — use `null`
+- Exposing persistence documents directly without DTOs
+- Coupling frontends to the exact persistence structure
+- Implementing `portfolio_publications` until there is a concrete use case
+
+---
+
+## 14. MVP
+
+### Persistence
 - PostgreSQL:
-  - `users`
+  - `users` (already exists)
   - `portfolios`
 - MongoDB:
   - `portfolio_contents`
 
-### Endpoints
+### Minimum endpoints
+- `POST /auth/register`
+- `POST /auth/login`
 - `POST /admin/portfolios`
+- `GET /admin/portfolios` — authenticated user's portfolios only
 - `GET /admin/portfolios/{id}/draft`
 - `PUT /admin/portfolios/{id}/draft`
 - `POST /admin/portfolios/{id}/publish`
-- `GET /public/portfolios/{slug}`
+- `GET /public/portfolios/{id}`
 
-### Secciones del contenido MVP
+### MVP content sections
 - `seo`
 - `hero`
 - `about.photos`
@@ -792,37 +793,27 @@ Si quieres iterar rápido, el MVP podría quedar así:
 - `projects`
 - `posts`
 
-Con eso ya puedes alimentar un portafolio personal muy completo.
+---
+
+## 15. Confirmed architecture
+
+1. **PostgreSQL for users + portfolio metadata**
+2. **MongoDB for versioned portfolio content**
+3. **Hexagonal architecture** with separate ports for public reading and administration
+4. **Aggregated document per version** to serve the full portfolio to the frontend in one call
+5. **Stable public DTOs** to avoid leaking internal details
+6. **Multi-user headless CMS** — the API serves JSON; each user integrates their own frontend
+7. **Single API** — no microservice split; admin and public concerns are separated logically, not by deployment
 
 ---
 
-## 15. Recomendación final
+## 16. Suggested next steps
 
-La mejor decisión para este proyecto, con el stack que ya tienes, es:
+Implement in this order:
 
-1. **PostgreSQL para usuarios + metadatos del portafolio**
-2. **MongoDB para el contenido versionado del portafolio**
-3. **Hexagonal architecture** con puertos separados para lectura pública y administración
-4. **Documento agregado por versión** para servir el portafolio completo al frontend
-5. **DTOs públicos estables** para no filtrar detalles internos
-
-Esta arquitectura te da:
-- flexibilidad para evolucionar secciones
-- buen performance de lectura
-- seguridad administrativa
-- posibilidad real de soportar más de un portafolio
-
----
-
-## 16. Siguiente paso sugerido
-
-El siguiente paso natural en este repositorio sería implementar, en este orden:
-
-1. entidad JPA `PortfolioEntity`
-2. documento Mongo `PortfolioContentDocument`
-3. puertos de dominio de lectura/escritura
-4. casos de uso de creación, edición draft y publicación
-5. controllers `admin` y `public`
-6. migración Flyway para `portfolios`
-
-Si quieres, el siguiente paso puede ser que te deje ya armado el **esqueleto de dominio + persistencia + endpoints base** siguiendo exactamente este diseño.
+1. Flyway migration `V2__create_portfolios_table.sql` — no `slug` column
+2. JPA entity `PortfolioEntity`
+3. MongoDB document `PortfolioContentDocument`
+4. Domain ports (`domain/port/in/`, `domain/port/out/`)
+5. Use cases: create portfolio, edit draft, publish, get public
+6. Controllers `AdminPortfolioController` and `PublicPortfolioController`
