@@ -129,9 +129,10 @@ In this order:
 
 ### API contracts
 - Public endpoints: `/public/sites/**` — no auth
-- Admin endpoints: `/admin/sites/**` — require `ADMIN` or `EDITOR` role
+- CMS endpoints: `/cms/sites/**` — require authentication (user's own resources)
 - Auth endpoints: `/auth/**` — no auth required
-- DTOs must be separate for public vs admin responses; never expose persistence documents directly
+- Admin endpoints: `/admin/**` — reserved for future system-level operations
+- DTOs must be separate for public vs cms responses; never expose persistence documents directly
 - `live` field on `Project` must persist as `null`, not `"#"` — `null` means no URL
 - `Post.date` persists as `LocalDate`, serialize as `YYYY-MM-DD`
 - `Job.highlights`: min 2, max 4 recommended
@@ -141,7 +142,7 @@ In this order:
 ### Public endpoint protection
 `GET /public/sites/{id}` is unauthenticated. Two mitigations are required before production:
 
-- **Response caching** (Spring Cache + Caffeine): published content does not change until the next publish action — cache it. Evict on `POST /admin/sites/{id}/publish`. Migrate to Redis when running multiple instances.
+- **Response caching** (Spring Cache + Caffeine): published content does not change until the next publish action — cache it. Evict on `POST /cms/sites/{id}/publish`. Migrate to Redis when running multiple instances.
 - **Rate limiting** (Bucket4j): ~20 req/s per IP on `/public/**`, return `429` when exceeded. In-memory to start, Redis-backed when scaling.
 
 ---

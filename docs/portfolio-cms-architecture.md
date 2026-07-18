@@ -5,7 +5,6 @@
 - [x] Define the functional goal of the CMS
 - [x] Propose an architecture aligned with the existing hexagonal structure
 - [x] Separate concerns between public reading, administration, and persistence
-- [x] Design a data model covering `Photo`, `Fact`, `Skill`, `Job`, `Project`, and `Post`
 - [x] Ground the proposal in the current stack: Spring Boot + PostgreSQL + MongoDB
 - [x] Define concrete endpoints, packages, and evolution path
 - [x] Confirm headless multi-user model
@@ -14,6 +13,10 @@
 - [x] Drop `site_publications` from initial scope
 - [x] Confirm single API serves both CMS UI and each user's frontend
 - [x] Rename portfolio → site for generality
+- [x] Replace typed content model with generic Map<String, Object> (Option C hybrid)
+- [x] Replace PostCard with generic Entry entity
+- [x] Separate draft and published content into distinct documents
+- [x] Replace /admin prefix with /cms for user-owned resource endpoints
 
 ---
 
@@ -26,12 +29,17 @@
 | Deployment | Single API — no microservice split needed at this stage |
 | Users | Multi-user; anyone can register and manage their own content |
 | Public identification | UUID only — no slug. Each user's frontend is responsible for its own URLs |
-| Draft/publish | Required — saving never auto-publishes |
-| Publication history (`site_publications`) | Out of scope for now |
+| Draft/publish | Required — saving never auto-publishes. Draft and published are separate documents |
+| Autoguardado | Frontend responsibility — calls `PUT /cms/sites/{id}/entries/{entryId}/draft` periodically. Backend has no special logic for it |
+| Publication history | Out of scope for now |
 | User isolation | Each site has `ownerUserId`; use cases must validate ownership |
-| Content storage | MongoDB — flexible schema, embedded per version |
-| Identity and metadata | PostgreSQL — strong integrity |
-| Naming | `site` / `sites` — generic, not tied to portfolio use case |
+| Content model | `Map<String, Object>` — backend does not interpret content structure |
+| Typed entities | Only what the backend needs to manage: `Site` metadata, `Entry` metadata, draft/published documents |
+| Entry | Generic content unit with its own page. Type is a frontend label (`post`, `project`, `page`, etc.) — backend does not distinguish |
+| Series | Entries reference a parent entry via `parentId`. No separate collection needed |
+| Naming — user endpoints | `/cms/**` — user's own resources |
+| Naming — system admin | `/admin/**` — reserved for future system-level operations (user management, global metrics) |
+| Naming — public | `/public/**` — unauthenticated read-only |
 
 ---
 
@@ -39,135 +47,85 @@
 
 This backend is a **multi-user headless CMS**. It acts as a content management layer for any frontend that wants to integrate against it. It does not render HTML — it delivers JSON.
 
-A **site** is the core content unit. It can represent a portfolio, a personal blog, a product page, a CV, or any other structured content a user wants to publish. The CMS does not care what the site represents — it manages its content and exposes it.
+A **site** is the core content unit. It can represent a portfolio, a personal blog, a product page, a CV, or anything else. A site contains **entries** — any piece of content that needs its own page (posts, projects, series, etc.).
 
 The system serves **two types of consumers from a single API**:
 - **CMS UI** (admin frontend) — logs in, edits drafts, publishes content
 - **Each user's frontend** — reads the published version with no authentication
 
-The CMS and each user's frontend are separate applications. The CMS exposes an API; each user integrates their own frontend however they prefer.
-
 ### Target capabilities
 
 1. **Register users** and authenticate them with JWT.
-2. **Manage content** from private, per-user endpoints.
+2. **Manage sites and entries** from private, per-user endpoints (`/cms/**`).
 3. **Draft/publish** — edit without breaking what the frontend is already serving.
 4. **Expose published content** through public endpoints with no authentication.
-5. **Maintain schema flexibility** in MongoDB so different sites can have different sections.
+5. **Generic content** — backend stores and serves `Map<String, Object>`, frontend defines structure.
 
 ---
 
 ## 2. Current project state
 
 - Hexagonal architecture base already exists.
-- Spring Security + JWT already in place for the admin zone.
-- Hybrid persistence already configured:
-  - **PostgreSQL**
-  - **MongoDB**
+- Spring Security + JWT already in place.
+- Hybrid persistence already configured: PostgreSQL + MongoDB.
 - `users` table already lives in PostgreSQL.
-
-This confirms the right split for this CMS:
-- **PostgreSQL for identity, control, metadata, and strong integrity**
-- **MongoDB for editorial site content**, because its sections are flexible and document-oriented
 
 ---
 
-## 3. Architecture proposal
+## 3. Architecture
 
 ## 3.1 Functional domain split
 
-The system divides into 3 conceptual areas:
-
 ### A. Identity & Access
-- CMS users
-- JWT authentication
-- Roles (`ADMIN`, `EDITOR`, `VIEWER`)
+- Users, JWT authentication, roles (`ADMIN`, `EDITOR`, `VIEWER`)
 
 ### B. Site Management
-- Sites
-- Content sections
-- Editorial validations
-- Draft/published state
+- Sites, entries, draft/publish lifecycle
 
 ### C. Public Content Delivery
-- Public endpoints for frontends
-- Payload optimized for consumption
-- Always serves the published version
+- Public endpoints, always serves published documents
 
 ---
 
 ## 3.2 Hexagonal architecture applied
 
-### Domain
-Business models and rules:
+### Domain models
 - `Site`
-- `SiteContent`
-- `Photo`
-- `Fact`
-- `Skill`
-- `Job`
-- `Project`
-- `Post`
+- `SiteEntry`
 - `PublicationStatus`
 
 ### Input ports
-Use cases as interfaces:
 - `CreateSiteUseCase`
 - `UpdateSiteDraftUseCase`
 - `PublishSiteUseCase`
 - `GetSitePublicUseCase`
-- `GetSiteAdminUseCase`
+- `CreateEntryUseCase`
+- `UpdateEntryDraftUseCase`
+- `PublishEntryUseCase`
+- `GetEntryPublicUseCase`
 
-### Application layer
-Use case implementations:
-- Orchestrate validations
-- Decide what goes to PostgreSQL and what goes to MongoDB
-- Control publishing and versioning
-
-### Inbound adapters
-- Admin REST controllers
-- Public REST controllers
-- JWT authentication
-
-### Outbound adapters
-- JPA repositories for relational metadata
-- MongoDB repositories for document content
-- Future storage adapter if file uploads are added
+### Outbound ports
+- `SiteRepository`
+- `SiteDraftRepository`
+- `SitePublishedRepository`
+- `SiteEntryRepository`
+- `SiteEntryDraftRepository`
+- `SiteEntryPublishedRepository`
 
 ---
 
 ## 3.3 Persistence strategy
 
-### PostgreSQL
-Store here what requires:
-- Strong uniqueness
-- Relationships
-- Simple auditing
-- Administrative filtering
-
-### MongoDB
-Store here what is:
-- Structured but flexible content
-- Embedded sections
-- Lists of skills, jobs, projects, and posts
-- Draft/published snapshots
+- **PostgreSQL**: identity and metadata — `users`, `sites`, `site_entries`. Strong integrity, ownership queries, status filtering.
+- **MongoDB**: all content — `site_drafts`, `site_published`, `site_entry_drafts`, `site_entry_published`. Flexible schema, no migrations needed when content structure changes.
 
 ---
 
-## 4. Recommended domain model
+## 4. Domain model
 
-## 4.1 Main aggregate: `Site`
+## 4.1 `Site` — PostgreSQL
 
-`Site` represents a publishable content unit. It can be a portfolio, blog, product page, or anything else.
-
-### Responsibilities
-- Site identity (UUID)
-- Owner (`ownerUserId`)
-- Publication status
-- Reference to the published version
-- Timestamps
-
-### Conceptual model
+The site is the root publishable unit. Metadata lives in PostgreSQL; content lives in MongoDB.
 
 ```text
 Site
@@ -176,214 +134,150 @@ Site
 - title: String
 - summary: String
 - status: DRAFT | PUBLISHED | ARCHIVED
-- currentDraftVersion: Int
-- currentPublishedVersion: Int?
 - createdAt: Instant
 - updatedAt: Instant
 ```
 
-> No `slug` — sites are identified exclusively by UUID. The public URL is the responsibility of each user's frontend, not this API.
-
-> `title` and `summary` are basic metadata. All heavy content lives in MongoDB.
+> No `slug` — identified by UUID only.
 
 ---
 
-## 4.2 Aggregate/document: `SiteContent`
+## 4.2 `SiteEntry` — PostgreSQL
 
-This document holds the actual editable content for a given site version.
-
-### Conceptual model
+An entry is any piece of content within a site that has its own page. The backend manages its lifecycle; the backend does not interpret its content.
 
 ```text
-SiteContent
+SiteEntry
+- id: UUID
+- siteId: UUID
+- parentId: UUID?    ← null if direct child of site; points to another entry if part of a series
+- type: String       ← frontend label: "post", "project", "page", "series", etc.
+- published: boolean
+- order: Integer?
+- createdAt: Instant
+- updatedAt: Instant
+```
+
+**Series:** an entry with `type: "series"` is just another entry. Its children set `parentId` to its `id`. No separate collection or model needed.
+
+---
+
+## 4.3 Content documents — MongoDB
+
+Content is always `Map<String, Object>`. The backend stores and serves it without interpreting its structure.
+
+### `site_drafts`
+```text
+SiteDraftDocument
 - id: ObjectId
 - siteId: UUID
-- version: Int
-- seo: SeoBlock
-- hero: HeroBlock
-- about: AboutBlock
-- skills: List<Skill>
-- jobs: List<Job>
-- projects: List<Project>
-- posts: List<PostCard>
-- createdAt: Instant
+- content: Map<String, Object>   ← free, frontend defines structure
 - updatedAt: Instant
 ```
 
-### Why embedded
+One document per site. Overwritten on every save.
 
-Site frontends typically need to load most content in a single query. Additionally:
-- Lists are not massive
-- Everything belongs to the same visual aggregate
-- High cohesion between sections
+### `site_published`
+```text
+SitePublishedDocument
+- id: ObjectId
+- siteId: UUID
+- content: Map<String, Object>   ← snapshot copied from draft at publish time
+- publishedAt: Instant
+```
+
+One document per site. Overwritten on every publish.
+
+### `site_entry_drafts`
+```text
+SiteEntryDraftDocument
+- id: ObjectId
+- entryId: UUID
+- siteId: UUID
+- content: Map<String, Object>   ← free
+- updatedAt: Instant
+```
+
+One document per entry. Overwritten on every save (autoguardado hits this).
+
+### `site_entry_published`
+```text
+SiteEntryPublishedDocument
+- id: ObjectId
+- entryId: UUID
+- siteId: UUID
+- content: Map<String, Object>   ← snapshot copied from draft at publish time
+- publishedAt: Instant
+```
+
+One document per entry. Overwritten on every publish.
 
 ---
 
-## 4.3 Reusable value objects
+## 4.4 Example document
 
-### `Photo`
+```json
+// site_drafts — the CMS UI writes whatever structure the frontend expects
+{
+  "siteId": "b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a",
+  "content": {
+    "seo": {
+      "title": "Santiago Acevedo | Backend Developer",
+      "description": "Java, Spring Boot, hexagonal architecture"
+    },
+    "hero": {
+      "greeting": "Hi, I'm",
+      "name": "Santiago Acevedo",
+      "tagline": "Backend developer building APIs and scalable systems."
+    },
+    "skills": [
+      { "name": "Java", "slug": "openjdk", "category": "BACKEND" }
+    ],
+    "jobs": [
+      {
+        "company": "Acme",
+        "role": "Backend Developer",
+        "period": "2022 — Present",
+        "highlights": ["Built resilient REST APIs"]
+      }
+    ]
+  },
+  "updatedAt": "2026-06-18T10:00:00Z"
+}
 
-```text
-Photo
-- src: String
-- alt: String
+// site_entry_drafts — a blog post
+{
+  "entryId": "c1d2e3f4-...",
+  "siteId": "b7fd3b44-...",
+  "content": {
+    "title": "Designing hexagonal APIs",
+    "date": "2026-06-18",
+    "body": "# Introduction\n\nHexagonal architecture separates...",
+    "tags": ["architecture", "spring"],
+    "readTime": "8 min read",
+    "banner": "https://cdn.example.com/banner.png"
+  },
+  "updatedAt": "2026-06-18T10:00:00Z"
+}
+
+// site_entry_drafts — a series index
+{
+  "entryId": "series-uuid-...",
+  "siteId": "b7fd3b44-...",
+  "content": {
+    "title": "Hexagonal Architecture Series",
+    "description": "A 3-part series on building clean Java backends.",
+    "banner": "https://cdn.example.com/series-banner.png"
+  },
+  "updatedAt": "2026-06-18T10:00:00Z"
+}
 ```
-
-**Rules:**
-- `src` required
-- `alt` required
-- Ideally an absolute URL or path resolved by a media service
 
 ---
 
-### `Fact`
-
-```text
-Fact
-- label: String
-- value: String
-```
-
-**Rules:**
-- `label` short and stable
-
-Future suggestion — add a `key` for internal consistency:
-
-```text
-Fact
-- key: String   // location, experience, timezone
-- label: String // Location
-- value: String // Colombia
-```
-
----
-
-### `Skill`
-
-```text
-Skill
-- name: String
-- slug: String
-- category: BACKEND | FRONTEND | CLOUD_DEVOPS
-- fallbackIcon: String?
-- description: String
-```
-
-**Rules:**
-- `slug` intended for simple-icons
-- `fallbackIcon` optional
-- `name + category` could be unique within the same site
-
----
-
-### `Job`
-
-```text
-Job
-- company: String
-- logoSlug: String?
-- role: String
-- period: String
-- location: String
-- highlights: List<String>
-- tech: List<String>
-```
-
-**Rules:**
-- `highlights`: minimum 2, recommended maximum 4
-- `tech`: short list of tags
-- Add `order` later if automatic ordering is needed
-
----
-
-### `Project`
-
-```text
-Project
-- name: String
-- filename: String
-- description: String
-- tech: List<String>
-- github: String
-- live: String?
-- preview: String?
-```
-
-**Rules:**
-- `github` required and must be a valid URL
-- `live` nullable in persistence — the frontend can convert `null` to `#` if needed visually
-- Do not persist `#` — it does not represent a real resource
-
----
-
-### `PostCard`
-
-Card embedded in `site_contents`. References the full post document by `postId`.
-
-```text
-PostCard
-- postId: String
-- title: String
-- date: LocalDate
-- excerpt: String
-- tags: List<String>
-- readTime: String
-- banner: String?
-```
-
-**Rules:**
-- `date` must persist as a real date, not just a string
-- Serialize as `YYYY-MM-DD`
-- `tags` must never be `null`, though an empty list is fine
-
----
-
-## 4.4 Additional recommended blocks
-
-### `SeoBlock`
-
-```text
-SeoBlock
-- title: String
-- description: String
-- canonicalUrl: String?
-- ogImage: String?
-```
-
-### `HeroBlock`
-
-```text
-HeroBlock
-- greeting: String
-- name: String
-- tagline: String
-- primaryCtaLabel: String
-- primaryCtaUrl: String
-- secondaryCtaLabel: String?
-- secondaryCtaUrl: String?
-```
-
-### `AboutBlock`
-
-```text
-AboutBlock
-- title: String
-- description: String
-- photos: List<Photo>
-- facts: List<Fact>
-```
-
-`Photo` and `Fact` are always scoped to `AboutBlock` — they do not float as orphan objects.
-
----
-
-## 5. Persistence model
-
-## 5.1 PostgreSQL: relational tables
+## 5. Persistence model — PostgreSQL tables
 
 ### User identity schema
-
-The current `users` table is replaced by a normalized schema that supports local auth, OAuth2 social login, multiple roles per user, and flexible profile data. The old single-table approach had `password NOT NULL`, which cannot support OAuth users.
 
 ```text
 users                          ← core identity, never grows
@@ -394,21 +288,21 @@ users                          ← core identity, never grows
 - created_at   TIMESTAMP NOT NULL
 - updated_at   TIMESTAMP NOT NULL
 
-roles                          ← role catalog
+roles
 - id           SERIAL PK
 - name         VARCHAR(50) NOT NULL UNIQUE  -- ADMIN | EDITOR | VIEWER
 
-user_roles                     ← many-to-many: a user can hold multiple roles
+user_roles
 - user_id      BIGINT NOT NULL FK users(id)
 - role_id      INT NOT NULL FK roles(id)
 - PK (user_id, role_id)
 
-user_credentials               ← local email/password login
+user_credentials
 - user_id      BIGINT PK FK users(id)
 - password_hash VARCHAR(255) NOT NULL
 - created_at   TIMESTAMP NOT NULL
 
-user_oauth_providers           ← Google, GitHub, etc.
+user_oauth_providers
 - id           BIGSERIAL PK
 - user_id      BIGINT NOT NULL FK users(id)
 - provider     VARCHAR(30) NOT NULL   -- GOOGLE | GITHUB
@@ -416,48 +310,41 @@ user_oauth_providers           ← Google, GitHub, etc.
 - created_at   TIMESTAMP NOT NULL
 - UNIQUE (provider, provider_user_id)
 
-user_profiles                  ← enriched profile data, evolves freely
+user_profiles
 - user_id      BIGINT PK FK users(id)
 - last_name    VARCHAR(100) NULL
 - phone        VARCHAR(30) NULL
 - bio          TEXT NULL
 - avatar_url   VARCHAR(500) NULL
 - website      VARCHAR(255) NULL
-- metadata     JSONB NULL DEFAULT '{}'   ← free-form fields, no migration needed
+- metadata     JSONB NULL DEFAULT '{}'
 - updated_at   TIMESTAMP NOT NULL
 ```
 
-**Why this split:**
-- `users` stays stable — only fields that exist for every user, always
-- `user_credentials` is absent for OAuth-only users; `user_oauth_providers` is absent for local-only users — no nullable hacks
-- `user_roles` supports multiple roles per user and future pricing/plan-based permission models without touching the schema
-- `user_profiles` separates identity from enriched data; `metadata JSONB` absorbs optional or experimental fields without Flyway migrations — promote to a column when a field becomes universal
-- All identity tables stay in PostgreSQL for strong relational integrity; MongoDB is reserved for editorial site content only
-
-### New table `sites`
+### Sites and entries
 
 ```text
 sites
-- id UUID PK
-- owner_user_id BIGINT NOT NULL FK users(id)
-- title VARCHAR(150) NOT NULL
-- summary VARCHAR(255) NULL
-- status VARCHAR(20) NOT NULL
-- current_draft_version INT NOT NULL DEFAULT 1
-- current_published_version INT NULL
-- created_at TIMESTAMP NOT NULL
-- updated_at TIMESTAMP NOT NULL
+- id                    UUID PK
+- owner_user_id         BIGINT NOT NULL FK users(id)
+- title                 VARCHAR(150) NOT NULL
+- summary               VARCHAR(255) NULL
+- status                VARCHAR(20) NOT NULL DEFAULT 'DRAFT'
+- created_at            TIMESTAMP NOT NULL
+- updated_at            TIMESTAMP NOT NULL
+
+site_entries
+- id                    UUID PK
+- site_id               UUID NOT NULL FK sites(id)
+- parent_id             UUID NULL FK site_entries(id)   ← self-reference for series
+- type                  VARCHAR(50) NOT NULL             ← frontend label, not validated by backend
+- published             BOOLEAN NOT NULL DEFAULT FALSE
+- order                 INT NULL
+- created_at            TIMESTAMP NOT NULL
+- updated_at            TIMESTAMP NOT NULL
 ```
 
-> No `slug` column — sites are identified by UUID only.
-
-### Table `site_publications` — **out of scope for now**
-
-Intentionally omitted. Do not add until there is a concrete use case.
-
-### Optional table `media_assets`
-
-Only if file uploads to the backend are added later, instead of storing external URLs.
+### Optional table `media_assets` (future)
 
 ```text
 media_assets
@@ -472,276 +359,114 @@ media_assets
 
 ---
 
-## 5.2 MongoDB: document collections
+## 6. MongoDB indexes
 
-### Collection `site_contents`
+```text
+site_drafts
+  - unique: siteId
 
-Suggested document:
+site_published
+  - unique: siteId
 
-```json
-{
-  "siteId": "b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a",
-  "version": 3,
-  "seo": {
-    "title": "Santiago Acevedo | Backend Developer",
-    "description": "Java, Spring Boot, hexagonal architecture and cloud",
-    "canonicalUrl": "https://your-domain.dev",
-    "ogImage": "https://cdn.example.com/og.png"
-  },
-  "hero": {
-    "greeting": "Hi, I'm",
-    "name": "Santiago Acevedo",
-    "tagline": "Backend developer building APIs, integrations and scalable systems.",
-    "primaryCtaLabel": "View projects",
-    "primaryCtaUrl": "/projects",
-    "secondaryCtaLabel": "Contact",
-    "secondaryCtaUrl": "/contact"
-  },
-  "about": {
-    "title": "About me",
-    "description": "Backend developer focused on Java, Spring, and API design.",
-    "photos": [
-      {
-        "src": "https://cdn.example.com/profile.jpg",
-        "alt": "Profile photo of Santiago Acevedo"
-      }
-    ],
-    "facts": [
-      { "label": "Location", "value": "Colombia" },
-      { "label": "Experience", "value": "4+ years" }
-    ]
-  },
-  "skills": [
-    {
-      "name": "Java",
-      "slug": "openjdk",
-      "category": "BACKEND",
-      "description": "Primary language · 4+ years"
-    }
-  ],
-  "jobs": [
-    {
-      "company": "Acme",
-      "logoSlug": "spring",
-      "role": "Backend Developer",
-      "period": "2022 — Present",
-      "location": "Remote",
-      "highlights": [
-        "Built resilient REST APIs",
-        "Improved query performance by 40%"
-      ],
-      "tech": ["Java", "Spring Boot", "PostgreSQL"]
-    }
-  ],
-  "projects": [
-    {
-      "name": "Event Stream Engine",
-      "filename": "EventStreamEngine.java",
-      "description": "Engine for domain event processing.",
-      "tech": ["Java", "Kafka", "Docker"],
-      "github": "https://github.com/user/repo",
-      "live": null,
-      "preview": "https://cdn.example.com/project-preview.png"
-    }
-  ],
-  "posts": [
-    {
-      "postId": "64f1a2b3c4d5e6f7a8b9c0d1",
-      "title": "Designing hexagonal APIs",
-      "date": "2026-06-18",
-      "excerpt": "What to separate into domain, application, and adapters.",
-      "tags": ["architecture", "spring", "hexagonal"],
-      "readTime": "8 min read",
-      "banner": "https://cdn.example.com/post-banner.png"
-    }
-  ],
-  "createdAt": "2026-06-18T10:00:00Z",
-  "updatedAt": "2026-06-18T10:00:00Z"
-}
+site_entry_drafts
+  - unique: entryId
+  - index: siteId
+
+site_entry_published
+  - unique: entryId
+  - index: siteId
+  - index: (siteId, entryId)
 ```
-
-### Suggested MongoDB indexes on `site_contents`
-
-- Compound unique index: `(siteId, version)`
-- Simple index: `siteId`
-
----
-
-## 6. Embedded vs separate collections — the expandable content pattern
-
-### The core pattern
-
-`site_contents` always holds the **card** — the minimum data needed to render a list item. When a section needs its own page, a separate collection holds the **full document**. The card references the full document by ID.
-
-This pattern is consistent, cheap to extend, and requires no changes to the existing document structure when a new section grows.
-
-```
-site_contents
-  └── posts[]
-        └── postId  ──────────────→  site_posts { _id, body, ... }
-  └── projects[]
-        └── projectId (future) ───→  site_projects { _id, body, ... }
-```
-
-**The rule:** if a section needs any of these, extract it into its own collection:
-- Individual URL per item
-- Pagination
-- Independent draft/publish per item
-- Content too large to embed (e.g. full markdown body)
-
-Otherwise, keep it embedded.
-
----
-
-### What is separated from the start
-
-#### `site_posts`
-
-Posts need individual URLs, independent draft/publish, and a full markdown body that does not belong embedded in the site snapshot.
-
-```json
-// Card embedded in site_contents
-{
-  "postId": "64f1a2b3c4d5e6f7a8b9c0d1",
-  "title": "Designing hexagonal APIs",
-  "date": "2026-06-18",
-  "excerpt": "What to separate into domain, application, and adapters.",
-  "tags": ["architecture", "spring", "hexagonal"],
-  "readTime": "8 min read",
-  "banner": "https://cdn.example.com/post-banner.png"
-}
-
-// Full document in site_posts
-{
-  "_id": "64f1a2b3c4d5e6f7a8b9c0d1",
-  "siteId": "b7fd3b44-...",
-  "title": "Designing hexagonal APIs",
-  "date": "2026-06-18",
-  "excerpt": "What to separate into domain, application, and adapters.",
-  "body": "# Introduction\n\nHexagonal architecture separates...",
-  "tags": ["architecture", "spring", "hexagonal"],
-  "readTime": "8 min read",
-  "banner": "https://cdn.example.com/post-banner.png",
-  "published": true,
-  "createdAt": "2026-06-18T10:00:00Z",
-  "updatedAt": "2026-06-18T10:00:00Z"
-}
-```
-
-Suggested indexes on `site_posts`:
-- `siteId` (simple)
-- `(siteId, published)` (compound — for public listing)
-
----
-
-### What stays embedded for now
-
-| Section | Reason to stay embedded |
-|---|---|
-| `skills` | Short stable catalog, no individual URL needed |
-| `jobs` | Grows very slowly, no individual URL needed |
-| `projects` | Card data is self-contained for now |
-| `hero`, `about`, `seo` | Unique blocks, not lists |
-
----
-
-### How to extend when a section outgrows embedded
-
-When `projects` (or any other section) needs individual pages, the migration is:
-
-1. Create `site_projects` collection with the same pattern as `site_posts`
-2. Add `projectId` to each project card in `site_contents`
-3. Add public endpoint `GET /public/sites/{id}/projects/{projectId}`
-4. Add admin endpoints for CRUD + publish on `site_projects`
-
-No changes to the rest of the system. The card in `site_contents` gains one field (`projectId`) and the full content moves to the new collection.
 
 ---
 
 ## 7. Endpoints
 
-## 7.1 Public
+## 7.1 Authentication
 
-### Site
-- `GET /public/sites/{id}` — full published site with post cards embedded. No auth required.
-
-> `id` is a UUID. There is no slug — each user's frontend is responsible for constructing friendly URLs.
-
-### Posts
-- `GET /public/sites/{id}/posts` — paginated list of published post cards
-- `GET /public/sites/{id}/posts/{postId}` — full post with body
-
-> The frontend builds the post page URL from the `postId` already present in the site card. If friendly URLs like `/blog/designing-hexagonal-apis` are needed, the frontend generates the slug from the title client-side — the API does not need to know about it.
-
----
-
-## 7.2 Authentication
-
-- `POST /auth/register` — open registration
-- `POST /auth/login` — returns JWT
-
----
-
-## 7.3 Admin
-
-### Sites
-- `POST /admin/sites`
-- `GET /admin/sites` — **returns only sites owned by the authenticated user**, never all sites in the system
-- `GET /admin/sites/{id}`
-- `PATCH /admin/sites/{id}/metadata`
-
-### Draft content
-- `GET /admin/sites/{id}/draft`
-- `PUT /admin/sites/{id}/draft`
-
-### Publishing
-- `POST /admin/sites/{id}/publish`
-- `POST /admin/sites/{id}/unpublish`
-
-### Posts
-- `POST /admin/sites/{id}/posts`
-- `GET /admin/sites/{id}/posts`
-- `GET /admin/sites/{id}/posts/{postId}`
-- `PUT /admin/sites/{id}/posts/{postId}`
-- `POST /admin/sites/{id}/posts/{postId}/publish`
-- `POST /admin/sites/{id}/posts/{postId}/unpublish`
-- `DELETE /admin/sites/{id}/posts/{postId}`
-
-### Media (future)
-- `POST /admin/media`
-- `GET /admin/media`
-
----
-
-## 8. Response contracts
-
-## 8.1 Public response
-
-Frontend-oriented payload:
-
-```json
-{
-  "id": "b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a",
-  "title": "Santiago Acevedo",
-  "summary": "Backend Developer",
-  "seo": {},
-  "hero": {},
-  "about": {},
-  "skills": [],
-  "jobs": [],
-  "projects": [],
-  "posts": [],
-  "publishedAt": "2026-06-18T10:00:00Z"
-}
+```
+POST /auth/register
+POST /auth/login
 ```
 
-## 8.2 Admin response
+## 7.2 /cms — authenticated user's resources
 
-Includes additionally:
-- `status`
-- `currentDraftVersion`
-- `currentPublishedVersion`
-- `updatedAt`
+### Sites
+```
+POST   /cms/sites
+GET    /cms/sites                          ← only the authenticated user's sites
+GET    /cms/sites/{id}
+PATCH  /cms/sites/{id}                     ← metadata only (title, summary)
+DELETE /cms/sites/{id}
+```
+
+### Site content (draft/publish)
+```
+GET    /cms/sites/{id}/draft               ← returns site_drafts document
+PUT    /cms/sites/{id}/draft               ← overwrites site_drafts (autoguardado hits this)
+POST   /cms/sites/{id}/publish             ← copies draft → site_published
+POST   /cms/sites/{id}/unpublish
+```
+
+### Entries
+```
+POST   /cms/sites/{id}/entries
+GET    /cms/sites/{id}/entries             ← all entries (supports ?type=post, ?parentId=x)
+GET    /cms/sites/{id}/entries/{entryId}
+PATCH  /cms/sites/{id}/entries/{entryId}   ← metadata only (type, order, parentId)
+DELETE /cms/sites/{id}/entries/{entryId}
+```
+
+### Entry content (draft/publish)
+```
+GET    /cms/sites/{id}/entries/{entryId}/draft
+PUT    /cms/sites/{id}/entries/{entryId}/draft     ← autoguardado hits this
+POST   /cms/sites/{id}/entries/{entryId}/publish
+POST   /cms/sites/{id}/entries/{entryId}/unpublish
+```
+
+## 7.3 /public — unauthenticated read-only
+
+```
+GET /public/sites/{id}                            ← published site content
+GET /public/sites/{id}/entries                    ← published entries (?type=post, ?parentId=x)
+GET /public/sites/{id}/entries/{entryId}          ← single published entry
+```
+
+## 7.4 /admin — reserved for future system-level operations
+
+```
+(not implemented yet)
+GET /admin/users
+GET /admin/sites
+```
+
+---
+
+## 8. Editorial flow
+
+### Site draft/publish
+
+1. User creates a site → `sites` row inserted, `site_drafts` document created empty.
+2. User edits content → `PUT /cms/sites/{id}/draft` overwrites `site_drafts`.
+3. Autoguardado → frontend calls `PUT /cms/sites/{id}/draft` periodically.
+4. User publishes → `POST /cms/sites/{id}/publish` copies `site_drafts.content` into `site_published`.
+5. Public endpoint reads `site_published` — never the draft.
+
+### Entry draft/publish
+
+Same flow, independent from the site:
+
+1. User creates entry → `site_entries` row inserted, `site_entry_drafts` document created empty.
+2. User edits → `PUT /cms/sites/{id}/entries/{entryId}/draft` overwrites `site_entry_drafts`.
+3. User publishes → `POST /cms/sites/{id}/entries/{entryId}/publish` copies draft → `site_entry_published`, sets `site_entries.published = true`.
+4. Public endpoint reads `site_entry_published`.
+
+### Series
+
+1. Create an entry with `type: "series"`.
+2. Create child entries with `parentId` set to the series entry id.
+3. `GET /public/sites/{id}/entries?parentId={seriesId}` returns all published children ordered by `order`.
 
 ---
 
@@ -749,30 +474,17 @@ Includes additionally:
 
 ### Site
 - `title` required
-- Ownership: a user may only read or write their own sites — validate in the use case, not just in authentication
-- Only `ADMIN` or `EDITOR` roles may edit
+- Ownership validated in use case — not just authentication
+- Only `ADMIN` or `EDITOR` roles may write
 
-### Photos
-- `src` not blank
-- `alt` required
+### SiteEntry
+- `type` required, non-blank — backend does not validate its value, only that it exists
+- `parentId` if provided must reference an entry in the same site
+- `order` optional
 
-### Skills
-- `name`, `slug`, `category`, `description` required
-- Category restricted to enum values
-
-### Jobs
-- `company`, `role`, `period`, `location` required
-- `highlights.size >= 2`
-- `highlights.size <= 4` recommended
-
-### Projects
-- `name`, `filename`, `description`, `github` required
-- `github` must be a valid URL
-- `live` nullable
-
-### Posts
-- `title`, `date`, `excerpt`, `readTime` required
-- `tags` must never be `null`, though an empty list is fine
+### Content documents
+- `content` must be a valid JSON object — not null, not an array
+- Backend does not validate internal structure
 
 ---
 
@@ -782,251 +494,196 @@ Includes additionally:
 src/main/java/com/cms/
 ├── domain/
 │   ├── model/
+│   │   ├── user/
+│   │   │   └── User.java
 │   │   └── site/
 │   │       ├── Site.java
-│   │       ├── SiteContent.java
-│   │       ├── SitePost.java
-│   │       ├── PublicationStatus.java
-│   │       ├── SeoBlock.java
-│   │       ├── HeroBlock.java
-│   │       ├── AboutBlock.java
-│   │       ├── Photo.java
-│   │       ├── Fact.java
-│   │       ├── Skill.java
-│   │       ├── SkillCategory.java
-│   │       ├── Job.java
-│   │       ├── Project.java
-│   │       └── PostCard.java
+│   │       ├── SiteEntry.java
+│   │       └── PublicationStatus.java
 │   └── port/
 │       ├── in/
-│       │   ├── CreateSiteUseCase.java
-│       │   ├── UpdateSiteDraftUseCase.java
-│       │   ├── PublishSiteUseCase.java
-│       │   ├── GetSitePublicUseCase.java
-│       │   ├── CreatePostUseCase.java
-│       │   ├── PublishPostUseCase.java
-│       │   └── GetPostPublicUseCase.java
+│       │   ├── site/
+│       │   │   ├── CreateSiteUseCase.java
+│       │   │   ├── UpdateSiteDraftUseCase.java
+│       │   │   ├── PublishSiteUseCase.java
+│       │   │   └── GetSitePublicUseCase.java
+│       │   └── entry/
+│       │       ├── CreateEntryUseCase.java
+│       │       ├── UpdateEntryDraftUseCase.java
+│       │       ├── PublishEntryUseCase.java
+│       │       └── GetEntryPublicUseCase.java
 │       └── out/
 │           ├── SiteRepository.java
-│           ├── SiteContentRepository.java
-│           ├── SitePostRepository.java
-│           └── MediaAssetRepository.java
+│           ├── SiteDraftRepository.java
+│           ├── SitePublishedRepository.java
+│           ├── SiteEntryRepository.java
+│           ├── SiteEntryDraftRepository.java
+│           └── SiteEntryPublishedRepository.java
 ├── application/
 │   └── usecase/
-│       ├── CreateSiteService.java
-│       ├── UpdateSiteDraftService.java
-│       ├── PublishSiteService.java
-│       ├── GetSitePublicService.java
-│       ├── CreatePostService.java
-│       ├── PublishPostService.java
-│       └── GetPostPublicService.java
+│       ├── site/
+│       │   ├── CreateSiteService.java
+│       │   ├── UpdateSiteDraftService.java
+│       │   ├── PublishSiteService.java
+│       │   └── GetSitePublicService.java
+│       └── entry/
+│           ├── CreateEntryService.java
+│           ├── UpdateEntryDraftService.java
+│           ├── PublishEntryService.java
+│           └── GetEntryPublicService.java
 └── adapters/
-    ├── in/web/controller/
-    │   ├── AdminSiteController.java
-    │   ├── AdminPostController.java
-    │   └── PublicSiteController.java
+    ├── in/web/
+    │   ├── controller/
+    │   │   ├── AuthController.java
+    │   │   ├── MeSiteController.java
+    │   │   ├── MeEntryController.java
+    │   │   └── PublicSiteController.java
+    │   └── dto/
+    │       ├── request/
+    │       └── response/
     └── out/persistence/
         ├── jpa/
         │   ├── entity/
-        │   │   └── SiteEntity.java
+        │   │   ├── UserEntity.java
+        │   │   ├── SiteEntity.java
+        │   │   └── SiteEntryEntity.java
         │   ├── repository/
-        │   │   └── SiteJpaRepository.java
+        │   │   ├── UserJpaRepository.java
+        │   │   ├── SiteJpaRepository.java
+        │   │   └── SiteEntryJpaRepository.java
         │   └── adapter/
-        │       └── SitePersistenceAdapter.java
+        │       ├── SitePersistenceAdapter.java
+        │       └── SiteEntryPersistenceAdapter.java
         └── mongo/
             ├── document/
-            │   ├── SiteContentDocument.java
-            │   └── SitePostDocument.java
+            │   ├── SiteDraftDocument.java
+            │   ├── SitePublishedDocument.java
+            │   ├── SiteEntryDraftDocument.java
+            │   └── SiteEntryPublishedDocument.java
             ├── repository/
-            │   ├── SiteContentMongoRepository.java
-            │   └── SitePostMongoRepository.java
+            │   ├── SiteDraftMongoRepository.java
+            │   ├── SitePublishedMongoRepository.java
+            │   ├── SiteEntryDraftMongoRepository.java
+            │   └── SiteEntryPublishedMongoRepository.java
             └── adapter/
-                ├── SiteContentPersistenceAdapter.java
-                └── SitePostPersistenceAdapter.java
+                ├── SiteDraftPersistenceAdapter.java
+                ├── SitePublishedPersistenceAdapter.java
+                ├── SiteEntryDraftPersistenceAdapter.java
+                └── SiteEntryPublishedPersistenceAdapter.java
 ```
 
 ---
 
-## 11. Editorial flow
+## 11. Public endpoint protection
 
-### Edit and publish a site
+`GET /public/sites/{id}` is unauthenticated. Two mitigations required before production:
 
-1. A user creates a site in PostgreSQL.
-2. `version = 1` of the content is created in MongoDB as a draft.
-3. The user updates the draft via `PUT /admin/sites/{id}/draft`.
-4. On publish:
-   - The full document is validated
-   - `currentPublishedVersion` is updated
-   - The public endpoint starts serving that version
-5. On subsequent edits:
-   - Overwrite the current draft, or
-   - Create a new draft version at `publishedVersion + 1`
-
-### Edit and publish a post
-
-Posts have their own independent draft/publish lifecycle:
-1. Create post via `POST /admin/sites/{id}/posts` — starts as unpublished
-2. Edit via `PUT /admin/sites/{id}/posts/{postId}`
-3. Publish via `POST /admin/sites/{id}/posts/{postId}/publish` — sets `published: true`
-4. The post card in `site_contents` draft must be updated to include the `postId` and then the site republished for the card to appear on the public site.
-
-### Practical recommendation
-
-Start with the simplest scheme:
-- **1 active draft per site**
-- **1 published version referenced from PostgreSQL**
-
-Do not add complex workflow until there is a real need for it.
-
----
-
-## 12. Public endpoint protection
-
-`GET /public/sites/{id}` is an unauthenticated endpoint. Two mitigations must be implemented before production.
-
-### 12.1 Response caching — implement now
-
-Published content does not change until the next `publish` action. It is an ideal cache candidate.
-
+### Response caching — implement now
 **Stack:** Spring Cache + Caffeine (in-memory). Migrate to Redis when running multiple instances.
 
 ```java
 @Cacheable(value = "published-site", key = "#id")
 public PublicSiteResponse getPublished(UUID id) { ... }
-```
 
-Cache invalidation: evict on `POST /admin/sites/{id}/publish`.
-
-```java
 @CacheEvict(value = "published-site", key = "#id")
 public void publish(UUID id) { ... }
 ```
 
-With caching in place, a flood of requests to the same site hits memory, not the database.
+### Rate limiting — implement now
+**Stack:** Bucket4j. ~20 req/s per IP on `/public/**`. Returns `429` when exceeded. In-memory to start, Redis-backed when scaling.
 
-### 12.2 Rate limiting — implement now
+### UUID as passive obscurity — already in place
+UUID v4 space is 2^122 — brute force enumeration is infeasible.
 
-Limit requests per IP on all public endpoints. **Stack:** Bucket4j (in-memory to start, Redis-backed when scaling).
-
-Suggested limit: ~20 requests/second per IP on `/public/**`. Exceeding returns `429 Too Many Requests`.
-
-No external infrastructure required for the initial setup.
-
-### 12.3 UUID as passive obscurity — already in place
-
-UUID v4 has a search space of 2^122. Enumerating valid IDs by brute force is computationally infeasible, unlike sequential IDs or predictable slugs. Not a security measure on its own, but it reduces targeted scraping risk.
-
-### 12.4 CDN / reverse proxy — future
-
-Cloudflare or nginx in front of the API handles volumetric DDoS at the network level before requests reach Spring. Relevant when there is real traffic or a concrete attack. Out of scope for now.
+### CDN / reverse proxy — future
+Cloudflare or nginx for volumetric DDoS. Out of scope for now.
 
 ---
 
-## 13. Image strategy
+## 12. Image strategy
 
 ### Phase 1
-- Store URLs only
-- Support CDN, Cloudinary, S3, or static assets
+- Store URLs only — CDN, Cloudinary, S3, or static assets
 
 ### Phase 2 (future)
-- Add `media` module
-- Upload file to the backend
-- Store metadata in `media_assets`
-- Return a public URL to be assigned to `Photo.src` or `Post.banner`
+- Add `media` module, upload to backend, store metadata in `media_assets`, return public URL
 
 ---
 
-## 14. Confirmed decisions
+## 13. Confirmed decisions
 
 ### Keep
 - Normalized user identity schema: `users`, `user_credentials`, `user_oauth_providers`, `user_roles`, `user_profiles`
-- Multiple roles per user via `user_roles` join table — supports future pricing/plan models
-- `user_profiles` with `metadata JSONB` for free-form profile fields without migrations
-- All identity and auth tables in PostgreSQL — no MongoDB for user data
-- Site content in MongoDB
-- `site` as the generic content unit — not tied to portfolio use case
-- Public endpoints separate from admin endpoints
-- Separate DTOs for admin and public responses
-- Bean Validation + domain rule validations
-- Draft/publish workflow — saving never auto-publishes
-- Single API serving both CMS UI and each user's frontend
-- Expandable content pattern: cards embedded in `site_contents`, full documents in separate collections (`site_posts`, future `site_projects`)
+- `user_profiles` with `metadata JSONB` for free-form fields
+- `site` as the generic content unit
+- `entry` as the generic child content unit with its own page
+- Draft and published content in separate MongoDB documents — never mixed in one object
+- `Map<String, Object>` for all content — backend does not interpret structure
+- `/cms/**` for user-owned resources, `/public/**` for read-only, `/admin/**` reserved for system ops
+- Autoguardado is a frontend concern — backend just exposes `PUT .../draft`
+- Series via `parentId` on entries — no separate collection
 
 ### Avoid
-- `password NOT NULL` on `users` — breaks OAuth users
-- Merging local auth and OAuth identity into a single table with nullable hacks
-- Slug as identifier — use UUID only
-- Forcing all site data into relational tables
-- Persisting `#` as a value for absent links — use `null`
-- Exposing persistence documents directly without DTOs
-- Coupling frontends to the exact persistence structure
-- Implementing `site_publications` until there is a concrete use case
+- Typed content classes for sections (`SeoBlock`, `HeroBlock`, etc.) — use `Map<String, Object>`
+- Storing draft and published content in the same document
+- `/admin` prefix for user content management endpoints
+- Slug as identifier — UUID only
+- Exposing draft documents on public endpoints
+- Validating content structure in the backend
 
 ### Pending decisions
-- **OAuth2 social login** (Google, GitHub): schema is ready (`user_oauth_providers`). Implementation requires registering OAuth Apps, adding `spring-boot-starter-oauth2-client`, and writing the authorization code exchange endpoint. The email-as-identifier edge case must be resolved before implementing: if a user registers locally and then tries OAuth with the same email, decide whether to merge accounts or reject. Defer until local auth is fully working.
-- **Pricing / plan tiers**: `user_roles` supports this already. When the time comes, add a `plans` table and either a `user_plan` column on `users` or a `user_plans` join table depending on whether a user can hold multiple plans simultaneously.
-- **Projects with individual pages**: when needed, follow the same pattern as `site_posts` — create `site_projects`, add `projectId` to the embedded card, add public and admin endpoints.
+- **OAuth2 social login** (Google, GitHub): schema ready. Resolve email-merge edge case before implementing.
+- **Pricing / plan tiers**: `user_roles` supports this. Add `plans` table when needed.
+- **Projects with individual pages**: follow entry pattern — create with `type: "project"`, same endpoints.
 
 ---
 
-## 15. MVP
+## 14. MVP
 
 ### Persistence
-- PostgreSQL:
-  - `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
-  - `sites`
-- MongoDB:
-  - `site_contents`
-  - `site_posts`
+- PostgreSQL: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`, `sites`, `site_entries`
+- MongoDB: `site_drafts`, `site_published`, `site_entry_drafts`, `site_entry_published`
 
 ### Minimum endpoints
-- `POST /auth/register`
-- `POST /auth/login`
-- `POST /admin/sites`
-- `GET /admin/sites` — authenticated user's sites only
-- `GET /admin/sites/{id}/draft`
-- `PUT /admin/sites/{id}/draft`
-- `POST /admin/sites/{id}/publish`
-- `GET /public/sites/{id}`
-- `POST /admin/sites/{id}/posts`
-- `PUT /admin/sites/{id}/posts/{postId}`
-- `POST /admin/sites/{id}/posts/{postId}/publish`
-- `GET /public/sites/{id}/posts`
-- `GET /public/sites/{id}/posts/{postId}`
-
-### MVP content sections
-- `seo`
-- `hero`
-- `about.photos`
-- `about.facts`
-- `skills`
-- `jobs`
-- `projects` (embedded cards, no individual page yet)
-- `posts` (cards embedded in `site_contents`, full documents in `site_posts`)
+```
+POST /auth/register
+POST /auth/login
+POST /cms/sites
+GET  /cms/sites
+GET  /cms/sites/{id}/draft
+PUT  /cms/sites/{id}/draft
+POST /cms/sites/{id}/publish
+POST /cms/sites/{id}/entries
+GET  /cms/sites/{id}/entries
+GET  /cms/sites/{id}/entries/{entryId}/draft
+PUT  /cms/sites/{id}/entries/{entryId}/draft
+POST /cms/sites/{id}/entries/{entryId}/publish
+GET  /public/sites/{id}
+GET  /public/sites/{id}/entries
+GET  /public/sites/{id}/entries/{entryId}
+```
 
 ---
 
-## 16. Confirmed architecture
+## 15. Confirmed architecture
 
-1. **PostgreSQL for users + site metadata**
-2. **MongoDB for versioned site content**
-3. **Hexagonal architecture** with separate ports for public reading and administration
-4. **Aggregated document per version** to serve the full site to the frontend in one call
-5. **Stable public DTOs** to avoid leaking internal details
-6. **Multi-user headless CMS** — the API serves JSON; each user integrates their own frontend
-7. **Single API** — no microservice split; admin and public concerns are separated logically, not by deployment
+1. **PostgreSQL** for users + site/entry metadata
+2. **MongoDB** for all content — draft and published as separate documents
+3. **Hexagonal architecture** with ports for each use case
+4. **Generic content model** — `Map<String, Object>`, frontend defines structure
+5. **Multi-user headless CMS** — API serves JSON, each user integrates their own frontend
+6. **Single API** — `/cms`, `/public`, `/auth`; `/admin` reserved for system ops
 
 ---
 
-## 17. Suggested next steps
+## 16. Suggested next steps
 
-Implement in this order:
-
-1. Rewrite `V1__create_users_table.sql` as the full normalized user schema: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
-2. Update `UserEntity` and related JPA entities to match the new schema; remove `UserDetails` implementation from the entity
-3. Flyway migration `V2__create_sites_table.sql`
-4. JPA entity `SiteEntity`
-5. MongoDB documents `SiteContentDocument` and `SitePostDocument`
-6. Domain ports (`domain/port/in/`, `domain/port/out/`)
-7. Use cases: create site, edit draft, publish site, create post, publish post, get public
-8. Controllers `AdminSiteController`, `AdminPostController`, and `PublicSiteController`
+1. Rewrite `V1__create_users_table.sql` — full normalized user schema
+2. Update `UserEntity` — remove `UserDetails` implementation from JPA entity
+3. Flyway `V2__create_sites_table.sql`
+4. Flyway `V3__create_site_entries_table.sql`
+5. MongoDB documents: `SiteDraftDocument`, `SitePublishedDocument`, `SiteEntryDraftDocument`, `SiteEntryPublishedDocument`
+6. Domain models: `Site`, `SiteEntry`
+7. Output ports and adapters
+8. Use cases
+9. Controllers: `AuthController`, `MeSiteController`, `MeEntryController`, `PublicSiteController`
