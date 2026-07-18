@@ -93,7 +93,9 @@ In this order:
 ## Persistence strategy
 
 - **PostgreSQL**: identity (`users`), portfolio metadata (`portfolios`). `ddl-auto: validate` — Hibernate does NOT manage schema; Flyway does.
-- **MongoDB**: all editorial content (`portfolio_contents`) — embedded document per portfolio version with `skills`, `jobs`, `projects`, `posts`, `seo`, `hero`, `about`.
+- **MongoDB**: editorial content split into two collections:
+  - `portfolio_contents` — versioned portfolio document with embedded cards for skills, jobs, projects, and post previews
+  - `portfolio_posts` — one document per post, contains full markdown body; referenced from `portfolio_contents` cards via `postId`
 - `portfolio_publications` (publication history) is **explicitly out of scope** for now — omit it.
 - Flyway migrations live in `src/main/resources/db/migration/`. Naming: `V{n}__{description}.sql`.
 

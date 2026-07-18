@@ -539,6 +539,7 @@ Suggested document:
   ],
   "posts": [
     {
+      "postId": "64f1a2b3c4d5e6f7a8b9c0d1",
       "title": "Designing hexagonal APIs",
       "date": "2026-06-18",
       "excerpt": "What to separate into domain, application, and adapters.",
@@ -559,26 +560,94 @@ Suggested document:
 
 ---
 
-## 6. Embedded vs separate collections
+## 6. Embedded vs separate collections — the expandable content pattern
 
-## Initial recommendation
+### The core pattern
 
-Keep `skills`, `jobs`, `projects`, and `posts` **embedded inside `portfolio_contents`**.
+`portfolio_contents` always holds the **card** — the minimum data needed to render a list item. When a section needs its own page, a separate collection holds the **full document**. The card references the full document by ID.
 
-### Advantages
-- Very fast reads for the frontend
-- A single document represents a complete version
-- Easy to publish a consistent snapshot
-- No logical joins between collections
+This pattern is consistent, cheap to extend, and requires no changes to the existing document structure when a new section grows.
 
-### When to separate `posts`
-If posts grow significantly and you need:
-- Real pagination
-- More advanced full-text search
-- Individual post URLs
-- Per-post drafts
+```
+portfolio_contents
+  └── posts[]
+        └── postId  ──────────────→  portfolio_posts { _id, body, ... }
+  └── projects[]
+        └── projectId (future) ───→  portfolio_projects { _id, body, ... }
+```
 
-Then move them to their own collection, e.g. `portfolio_posts`.
+**The rule:** if a section needs any of these, extract it into its own collection:
+- Individual URL per item
+- Pagination
+- Independent draft/publish per item
+- Content too large to embed (e.g. full markdown body)
+
+Otherwise, keep it embedded.
+
+---
+
+### What is separated from the start
+
+#### `portfolio_posts`
+
+Posts need individual URLs, independent draft/publish, and a full markdown body that does not belong embedded in the portfolio snapshot.
+
+```json
+// Card embedded in portfolio_contents
+{
+  "postId": "64f1a2b3c4d5e6f7a8b9c0d1",
+  "title": "Designing hexagonal APIs",
+  "date": "2026-06-18",
+  "excerpt": "What to separate into domain, application, and adapters.",
+  "tags": ["architecture", "spring", "hexagonal"],
+  "readTime": "8 min read",
+  "banner": "https://cdn.example.com/post-banner.png"
+}
+
+// Full document in portfolio_posts
+{
+  "_id": "64f1a2b3c4d5e6f7a8b9c0d1",
+  "portfolioId": "b7fd3b44-...",
+  "title": "Designing hexagonal APIs",
+  "date": "2026-06-18",
+  "excerpt": "What to separate into domain, application, and adapters.",
+  "body": "# Introduction\n\nHexagonal architecture separates...",
+  "tags": ["architecture", "spring", "hexagonal"],
+  "readTime": "8 min read",
+  "banner": "https://cdn.example.com/post-banner.png",
+  "published": true,
+  "createdAt": "2026-06-18T10:00:00Z",
+  "updatedAt": "2026-06-18T10:00:00Z"
+}
+```
+
+Suggested indexes on `portfolio_posts`:
+- `portfolioId` (simple)
+- `(portfolioId, published)` (compound — for public listing)
+
+---
+
+### What stays embedded for now
+
+| Section | Reason to stay embedded |
+|---|---|
+| `skills` | Short stable catalog, no individual URL needed |
+| `jobs` | Grows very slowly, no individual URL needed |
+| `projects` | Card data is self-contained for now |
+| `hero`, `about`, `seo` | Unique blocks, not lists |
+
+---
+
+### How to extend when a section outgrows embedded
+
+When `projects` (or any other section) needs individual pages, the migration is:
+
+1. Create `portfolio_projects` collection with the same pattern as `portfolio_posts`
+2. Add `projectId` to each project card in `portfolio_contents`
+3. Add public endpoint `GET /public/portfolios/{id}/projects/{projectId}`
+4. Add admin endpoints for CRUD + publish on `portfolio_projects`
+
+No changes to the rest of the system. The card in `portfolio_contents` gains one field (`projectId`) and the full content moves to the new collection.
 
 ---
 
@@ -586,20 +655,16 @@ Then move them to their own collection, e.g. `portfolio_posts`.
 
 ## 7.1 Public
 
-### Get full published portfolio
-`GET /public/portfolios/{id}`
+### Portfolio
+- `GET /public/portfolios/{id}` — full published portfolio with post cards embedded. No auth required.
 
-Returns the published version ready for frontend consumption. No authentication required.
+> `id` is a UUID. There is no slug — each user's frontend is responsible for constructing friendly URLs.
 
-> `id` is a UUID. There is no slug — each user's frontend is responsible for constructing friendly URLs from the UUID it receives from the API.
+### Posts
+- `GET /public/portfolios/{id}/posts` — paginated list of published post cards
+- `GET /public/portfolios/{id}/posts/{postId}` — full post with body
 
-### Get a single section (optional)
-Only if fine-grained optimization is needed:
-- `GET /public/portfolios/{id}/skills`
-- `GET /public/portfolios/{id}/projects`
-- `GET /public/portfolios/{id}/posts`
-
-> Start with the aggregated endpoint and only split if there is a real need.
+> The frontend builds the post page URL from the `postId` already present in the portfolio card. If friendly URLs like `/blog/designing-hexagonal-apis` are needed, the frontend generates the slug from the title client-side — the API does not need to know about it.
 
 ---
 
@@ -625,6 +690,15 @@ Only if fine-grained optimization is needed:
 ### Publishing
 - `POST /admin/portfolios/{id}/publish`
 - `POST /admin/portfolios/{id}/unpublish`
+
+### Posts
+- `POST /admin/portfolios/{id}/posts`
+- `GET /admin/portfolios/{id}/posts`
+- `GET /admin/portfolios/{id}/posts/{postId}`
+- `PUT /admin/portfolios/{id}/posts/{postId}`
+- `POST /admin/portfolios/{id}/posts/{postId}/publish`
+- `POST /admin/portfolios/{id}/posts/{postId}/unpublish`
+- `DELETE /admin/portfolios/{id}/posts/{postId}`
 
 ### Media (future)
 - `POST /admin/media`
@@ -873,6 +947,7 @@ Cloudflare or nginx in front of the API handles volumetric DDoS at the network l
   - `portfolios`
 - MongoDB:
   - `portfolio_contents`
+  - `portfolio_posts`
 
 ### Minimum endpoints
 - `POST /auth/register`
@@ -883,6 +958,11 @@ Cloudflare or nginx in front of the API handles volumetric DDoS at the network l
 - `PUT /admin/portfolios/{id}/draft`
 - `POST /admin/portfolios/{id}/publish`
 - `GET /public/portfolios/{id}`
+- `POST /admin/portfolios/{id}/posts`
+- `PUT /admin/portfolios/{id}/posts/{postId}`
+- `POST /admin/portfolios/{id}/posts/{postId}/publish`
+- `GET /public/portfolios/{id}/posts`
+- `GET /public/portfolios/{id}/posts/{postId}`
 
 ### MVP content sections
 - `seo`
@@ -891,8 +971,8 @@ Cloudflare or nginx in front of the API handles volumetric DDoS at the network l
 - `about.facts`
 - `skills`
 - `jobs`
-- `projects`
-- `posts`
+- `projects` (embedded cards, no individual page yet)
+- `posts` (cards embedded in portfolio_contents, full documents in portfolio_posts)
 
 ---
 
