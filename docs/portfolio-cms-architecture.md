@@ -1,4 +1,4 @@
-# Architecture and data model — Portfolio CMS
+# Architecture and data model — Headless CMS
 
 ## Checklist
 
@@ -11,8 +11,9 @@
 - [x] Confirm headless multi-user model
 - [x] Decide on UUID-only identification (no slug)
 - [x] Confirm draft/publish as a required workflow
-- [x] Drop `portfolio_publications` from initial scope
-- [x] Confirm single API serves both CMS UI and portfolio frontends
+- [x] Drop `site_publications` from initial scope
+- [x] Confirm single API serves both CMS UI and each user's frontend
+- [x] Rename portfolio → site for generality
 
 ---
 
@@ -21,15 +22,16 @@
 | Decision | Resolution |
 |---|---|
 | System type | Headless CMS API — serves JSON, not HTML |
-| Consumers | Two types: CMS UI (admin) + each user's own portfolio frontend (public) |
+| Consumers | Two types: CMS UI (admin) + each user's own frontend (public) |
 | Deployment | Single API — no microservice split needed at this stage |
 | Users | Multi-user; anyone can register and manage their own content |
 | Public identification | UUID only — no slug. Each user's frontend is responsible for its own URLs |
 | Draft/publish | Required — saving never auto-publishes |
-| Publication history (`portfolio_publications`) | Out of scope for now |
-| User isolation | Each portfolio has `ownerUserId`; use cases must validate ownership |
+| Publication history (`site_publications`) | Out of scope for now |
+| User isolation | Each site has `ownerUserId`; use cases must validate ownership |
 | Content storage | MongoDB — flexible schema, embedded per version |
 | Identity and metadata | PostgreSQL — strong integrity |
+| Naming | `site` / `sites` — generic, not tied to portfolio use case |
 
 ---
 
@@ -37,11 +39,13 @@
 
 This backend is a **multi-user headless CMS**. It acts as a content management layer for any frontend that wants to integrate against it. It does not render HTML — it delivers JSON.
 
+A **site** is the core content unit. It can represent a portfolio, a personal blog, a product page, a CV, or any other structured content a user wants to publish. The CMS does not care what the site represents — it manages its content and exposes it.
+
 The system serves **two types of consumers from a single API**:
 - **CMS UI** (admin frontend) — logs in, edits drafts, publishes content
-- **Portfolio frontends** (one per user) — reads the published version with no authentication
+- **Each user's frontend** — reads the published version with no authentication
 
-The CMS and each portfolio frontend are separate applications. The CMS exposes an API; each user integrates their own frontend however they prefer.
+The CMS and each user's frontend are separate applications. The CMS exposes an API; each user integrates their own frontend however they prefer.
 
 ### Target capabilities
 
@@ -49,7 +53,7 @@ The CMS and each portfolio frontend are separate applications. The CMS exposes a
 2. **Manage content** from private, per-user endpoints.
 3. **Draft/publish** — edit without breaking what the frontend is already serving.
 4. **Expose published content** through public endpoints with no authentication.
-5. **Maintain schema flexibility** in MongoDB so different portfolios can have different sections.
+5. **Maintain schema flexibility** in MongoDB so different sites can have different sections.
 
 ---
 
@@ -64,7 +68,7 @@ The CMS and each portfolio frontend are separate applications. The CMS exposes a
 
 This confirms the right split for this CMS:
 - **PostgreSQL for identity, control, metadata, and strong integrity**
-- **MongoDB for editorial portfolio content**, because its sections are flexible and document-oriented
+- **MongoDB for editorial site content**, because its sections are flexible and document-oriented
 
 ---
 
@@ -79,8 +83,8 @@ The system divides into 3 conceptual areas:
 - JWT authentication
 - Roles (`ADMIN`, `EDITOR`, `VIEWER`)
 
-### B. Portfolio Management
-- Portfolios
+### B. Site Management
+- Sites
 - Content sections
 - Editorial validations
 - Draft/published state
@@ -96,8 +100,8 @@ The system divides into 3 conceptual areas:
 
 ### Domain
 Business models and rules:
-- `Portfolio`
-- `PortfolioContent`
+- `Site`
+- `SiteContent`
 - `Photo`
 - `Fact`
 - `Skill`
@@ -108,11 +112,11 @@ Business models and rules:
 
 ### Input ports
 Use cases as interfaces:
-- `CreatePortfolioUseCase`
-- `UpdatePortfolioDraftUseCase`
-- `PublishPortfolioUseCase`
-- `GetPortfolioPublicUseCase`
-- `GetPortfolioAdminUseCase`
+- `CreateSiteUseCase`
+- `UpdateSiteDraftUseCase`
+- `PublishSiteUseCase`
+- `GetSitePublicUseCase`
+- `GetSiteAdminUseCase`
 
 ### Application layer
 Use case implementations:
@@ -152,12 +156,12 @@ Store here what is:
 
 ## 4. Recommended domain model
 
-## 4.1 Main aggregate: `Portfolio`
+## 4.1 Main aggregate: `Site`
 
-`Portfolio` represents the portfolio as a publishable unit.
+`Site` represents a publishable content unit. It can be a portfolio, blog, product page, or anything else.
 
 ### Responsibilities
-- Portfolio identity (UUID)
+- Site identity (UUID)
 - Owner (`ownerUserId`)
 - Publication status
 - Reference to the published version
@@ -166,7 +170,7 @@ Store here what is:
 ### Conceptual model
 
 ```text
-Portfolio
+Site
 - id: UUID
 - ownerUserId: Long
 - title: String
@@ -178,22 +182,22 @@ Portfolio
 - updatedAt: Instant
 ```
 
-> No `slug` — portfolios are identified exclusively by UUID. The public URL is the responsibility of each user's frontend, not this API.
+> No `slug` — sites are identified exclusively by UUID. The public URL is the responsibility of each user's frontend, not this API.
 
 > `title` and `summary` are basic metadata. All heavy content lives in MongoDB.
 
 ---
 
-## 4.2 Aggregate/document: `PortfolioContent`
+## 4.2 Aggregate/document: `SiteContent`
 
-This document holds the actual editable content for a given portfolio version.
+This document holds the actual editable content for a given site version.
 
 ### Conceptual model
 
 ```text
-PortfolioContent
+SiteContent
 - id: ObjectId
-- portfolioId: UUID
+- siteId: UUID
 - version: Int
 - seo: SeoBlock
 - hero: HeroBlock
@@ -201,14 +205,14 @@ PortfolioContent
 - skills: List<Skill>
 - jobs: List<Job>
 - projects: List<Project>
-- posts: List<Post>
+- posts: List<PostCard>
 - createdAt: Instant
 - updatedAt: Instant
 ```
 
 ### Why embedded
 
-Portfolio frontends typically need to load most content in a single query. Additionally:
+Site frontends typically need to load most content in a single query. Additionally:
 - Lists are not massive
 - Everything belongs to the same visual aggregate
 - High cohesion between sections
@@ -268,7 +272,7 @@ Skill
 **Rules:**
 - `slug` intended for simple-icons
 - `fallbackIcon` optional
-- `name + category` could be unique within the same portfolio
+- `name + category` could be unique within the same site
 
 ---
 
@@ -312,10 +316,13 @@ Project
 
 ---
 
-### `Post`
+### `PostCard`
+
+Card embedded in `site_contents`. References the full post document by `postId`.
 
 ```text
-Post
+PostCard
+- postId: String
 - title: String
 - date: LocalDate
 - excerpt: String
@@ -425,12 +432,12 @@ user_profiles                  ← enriched profile data, evolves freely
 - `user_credentials` is absent for OAuth-only users; `user_oauth_providers` is absent for local-only users — no nullable hacks
 - `user_roles` supports multiple roles per user and future pricing/plan-based permission models without touching the schema
 - `user_profiles` separates identity from enriched data; `metadata JSONB` absorbs optional or experimental fields without Flyway migrations — promote to a column when a field becomes universal
-- All identity tables stay in PostgreSQL for strong relational integrity; MongoDB is reserved for editorial portfolio content only
+- All identity tables stay in PostgreSQL for strong relational integrity; MongoDB is reserved for editorial site content only
 
-### New table `portfolios`
+### New table `sites`
 
 ```text
-portfolios
+sites
 - id UUID PK
 - owner_user_id BIGINT NOT NULL FK users(id)
 - title VARCHAR(150) NOT NULL
@@ -442,9 +449,9 @@ portfolios
 - updated_at TIMESTAMP NOT NULL
 ```
 
-> No `slug` column — portfolios are identified by UUID only.
+> No `slug` column — sites are identified by UUID only.
 
-### Table `portfolio_publications` — **out of scope for now**
+### Table `site_publications` — **out of scope for now**
 
 Intentionally omitted. Do not add until there is a concrete use case.
 
@@ -465,15 +472,15 @@ media_assets
 
 ---
 
-## 5.2 MongoDB: document collection
+## 5.2 MongoDB: document collections
 
-### Collection `portfolio_contents`
+### Collection `site_contents`
 
 Suggested document:
 
 ```json
 {
-  "portfolioId": "b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a",
+  "siteId": "b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a",
   "version": 3,
   "seo": {
     "title": "Santiago Acevedo | Backend Developer",
@@ -553,10 +560,10 @@ Suggested document:
 }
 ```
 
-### Suggested MongoDB indexes
+### Suggested MongoDB indexes on `site_contents`
 
-- Compound unique index: `(portfolioId, version)`
-- Simple index: `portfolioId`
+- Compound unique index: `(siteId, version)`
+- Simple index: `siteId`
 
 ---
 
@@ -564,16 +571,16 @@ Suggested document:
 
 ### The core pattern
 
-`portfolio_contents` always holds the **card** — the minimum data needed to render a list item. When a section needs its own page, a separate collection holds the **full document**. The card references the full document by ID.
+`site_contents` always holds the **card** — the minimum data needed to render a list item. When a section needs its own page, a separate collection holds the **full document**. The card references the full document by ID.
 
 This pattern is consistent, cheap to extend, and requires no changes to the existing document structure when a new section grows.
 
 ```
-portfolio_contents
+site_contents
   └── posts[]
-        └── postId  ──────────────→  portfolio_posts { _id, body, ... }
+        └── postId  ──────────────→  site_posts { _id, body, ... }
   └── projects[]
-        └── projectId (future) ───→  portfolio_projects { _id, body, ... }
+        └── projectId (future) ───→  site_projects { _id, body, ... }
 ```
 
 **The rule:** if a section needs any of these, extract it into its own collection:
@@ -588,12 +595,12 @@ Otherwise, keep it embedded.
 
 ### What is separated from the start
 
-#### `portfolio_posts`
+#### `site_posts`
 
-Posts need individual URLs, independent draft/publish, and a full markdown body that does not belong embedded in the portfolio snapshot.
+Posts need individual URLs, independent draft/publish, and a full markdown body that does not belong embedded in the site snapshot.
 
 ```json
-// Card embedded in portfolio_contents
+// Card embedded in site_contents
 {
   "postId": "64f1a2b3c4d5e6f7a8b9c0d1",
   "title": "Designing hexagonal APIs",
@@ -604,10 +611,10 @@ Posts need individual URLs, independent draft/publish, and a full markdown body 
   "banner": "https://cdn.example.com/post-banner.png"
 }
 
-// Full document in portfolio_posts
+// Full document in site_posts
 {
   "_id": "64f1a2b3c4d5e6f7a8b9c0d1",
-  "portfolioId": "b7fd3b44-...",
+  "siteId": "b7fd3b44-...",
   "title": "Designing hexagonal APIs",
   "date": "2026-06-18",
   "excerpt": "What to separate into domain, application, and adapters.",
@@ -621,9 +628,9 @@ Posts need individual URLs, independent draft/publish, and a full markdown body 
 }
 ```
 
-Suggested indexes on `portfolio_posts`:
-- `portfolioId` (simple)
-- `(portfolioId, published)` (compound — for public listing)
+Suggested indexes on `site_posts`:
+- `siteId` (simple)
+- `(siteId, published)` (compound — for public listing)
 
 ---
 
@@ -642,12 +649,12 @@ Suggested indexes on `portfolio_posts`:
 
 When `projects` (or any other section) needs individual pages, the migration is:
 
-1. Create `portfolio_projects` collection with the same pattern as `portfolio_posts`
-2. Add `projectId` to each project card in `portfolio_contents`
-3. Add public endpoint `GET /public/portfolios/{id}/projects/{projectId}`
-4. Add admin endpoints for CRUD + publish on `portfolio_projects`
+1. Create `site_projects` collection with the same pattern as `site_posts`
+2. Add `projectId` to each project card in `site_contents`
+3. Add public endpoint `GET /public/sites/{id}/projects/{projectId}`
+4. Add admin endpoints for CRUD + publish on `site_projects`
 
-No changes to the rest of the system. The card in `portfolio_contents` gains one field (`projectId`) and the full content moves to the new collection.
+No changes to the rest of the system. The card in `site_contents` gains one field (`projectId`) and the full content moves to the new collection.
 
 ---
 
@@ -655,16 +662,16 @@ No changes to the rest of the system. The card in `portfolio_contents` gains one
 
 ## 7.1 Public
 
-### Portfolio
-- `GET /public/portfolios/{id}` — full published portfolio with post cards embedded. No auth required.
+### Site
+- `GET /public/sites/{id}` — full published site with post cards embedded. No auth required.
 
 > `id` is a UUID. There is no slug — each user's frontend is responsible for constructing friendly URLs.
 
 ### Posts
-- `GET /public/portfolios/{id}/posts` — paginated list of published post cards
-- `GET /public/portfolios/{id}/posts/{postId}` — full post with body
+- `GET /public/sites/{id}/posts` — paginated list of published post cards
+- `GET /public/sites/{id}/posts/{postId}` — full post with body
 
-> The frontend builds the post page URL from the `postId` already present in the portfolio card. If friendly URLs like `/blog/designing-hexagonal-apis` are needed, the frontend generates the slug from the title client-side — the API does not need to know about it.
+> The frontend builds the post page URL from the `postId` already present in the site card. If friendly URLs like `/blog/designing-hexagonal-apis` are needed, the frontend generates the slug from the title client-side — the API does not need to know about it.
 
 ---
 
@@ -677,28 +684,28 @@ No changes to the rest of the system. The card in `portfolio_contents` gains one
 
 ## 7.3 Admin
 
-### Portfolios
-- `POST /admin/portfolios`
-- `GET /admin/portfolios` — **returns only portfolios owned by the authenticated user**, never all portfolios in the system
-- `GET /admin/portfolios/{id}`
-- `PATCH /admin/portfolios/{id}/metadata`
+### Sites
+- `POST /admin/sites`
+- `GET /admin/sites` — **returns only sites owned by the authenticated user**, never all sites in the system
+- `GET /admin/sites/{id}`
+- `PATCH /admin/sites/{id}/metadata`
 
 ### Draft content
-- `GET /admin/portfolios/{id}/draft`
-- `PUT /admin/portfolios/{id}/draft`
+- `GET /admin/sites/{id}/draft`
+- `PUT /admin/sites/{id}/draft`
 
 ### Publishing
-- `POST /admin/portfolios/{id}/publish`
-- `POST /admin/portfolios/{id}/unpublish`
+- `POST /admin/sites/{id}/publish`
+- `POST /admin/sites/{id}/unpublish`
 
 ### Posts
-- `POST /admin/portfolios/{id}/posts`
-- `GET /admin/portfolios/{id}/posts`
-- `GET /admin/portfolios/{id}/posts/{postId}`
-- `PUT /admin/portfolios/{id}/posts/{postId}`
-- `POST /admin/portfolios/{id}/posts/{postId}/publish`
-- `POST /admin/portfolios/{id}/posts/{postId}/unpublish`
-- `DELETE /admin/portfolios/{id}/posts/{postId}`
+- `POST /admin/sites/{id}/posts`
+- `GET /admin/sites/{id}/posts`
+- `GET /admin/sites/{id}/posts/{postId}`
+- `PUT /admin/sites/{id}/posts/{postId}`
+- `POST /admin/sites/{id}/posts/{postId}/publish`
+- `POST /admin/sites/{id}/posts/{postId}/unpublish`
+- `DELETE /admin/sites/{id}/posts/{postId}`
 
 ### Media (future)
 - `POST /admin/media`
@@ -740,9 +747,9 @@ Includes additionally:
 
 ## 9. Business validations
 
-### Portfolio
+### Site
 - `title` required
-- Ownership: a user may only read or write their own portfolios — validate in the use case, not just in authentication
+- Ownership: a user may only read or write their own sites — validate in the use case, not just in authentication
 - Only `ADMIN` or `EDITOR` roles may edit
 
 ### Photos
@@ -775,9 +782,10 @@ Includes additionally:
 src/main/java/com/cms/
 ├── domain/
 │   ├── model/
-│   │   └── portfolio/
-│   │       ├── Portfolio.java
-│   │       ├── PortfolioContent.java
+│   │   └── site/
+│   │       ├── Site.java
+│   │       ├── SiteContent.java
+│   │       ├── SitePost.java
 │   │       ├── PublicationStatus.java
 │   │       ├── SeoBlock.java
 │   │       ├── HeroBlock.java
@@ -788,53 +796,64 @@ src/main/java/com/cms/
 │   │       ├── SkillCategory.java
 │   │       ├── Job.java
 │   │       ├── Project.java
-│   │       └── Post.java
+│   │       └── PostCard.java
 │   └── port/
 │       ├── in/
-│       │   ├── CreatePortfolioUseCase.java
-│       │   ├── UpdatePortfolioDraftUseCase.java
-│       │   ├── PublishPortfolioUseCase.java
-│       │   └── GetPortfolioPublicUseCase.java
+│       │   ├── CreateSiteUseCase.java
+│       │   ├── UpdateSiteDraftUseCase.java
+│       │   ├── PublishSiteUseCase.java
+│       │   ├── GetSitePublicUseCase.java
+│       │   ├── CreatePostUseCase.java
+│       │   ├── PublishPostUseCase.java
+│       │   └── GetPostPublicUseCase.java
 │       └── out/
-│           ├── PortfolioRepository.java
-│           ├── PortfolioContentRepository.java
+│           ├── SiteRepository.java
+│           ├── SiteContentRepository.java
+│           ├── SitePostRepository.java
 │           └── MediaAssetRepository.java
 ├── application/
 │   └── usecase/
-│       ├── CreatePortfolioService.java
-│       ├── UpdatePortfolioDraftService.java
-│       ├── PublishPortfolioService.java
-│       └── GetPortfolioPublicService.java
+│       ├── CreateSiteService.java
+│       ├── UpdateSiteDraftService.java
+│       ├── PublishSiteService.java
+│       ├── GetSitePublicService.java
+│       ├── CreatePostService.java
+│       ├── PublishPostService.java
+│       └── GetPostPublicService.java
 └── adapters/
     ├── in/web/controller/
-    │   ├── AdminPortfolioController.java
-    │   └── PublicPortfolioController.java
+    │   ├── AdminSiteController.java
+    │   ├── AdminPostController.java
+    │   └── PublicSiteController.java
     └── out/persistence/
         ├── jpa/
         │   ├── entity/
-        │   │   └── PortfolioEntity.java
+        │   │   └── SiteEntity.java
         │   ├── repository/
-        │   │   └── PortfolioJpaRepository.java
+        │   │   └── SiteJpaRepository.java
         │   └── adapter/
-        │       └── PortfolioPersistenceAdapter.java
+        │       └── SitePersistenceAdapter.java
         └── mongo/
             ├── document/
-            │   └── PortfolioContentDocument.java
+            │   ├── SiteContentDocument.java
+            │   └── SitePostDocument.java
             ├── repository/
-            │   └── PortfolioContentMongoRepository.java
+            │   ├── SiteContentMongoRepository.java
+            │   └── SitePostMongoRepository.java
             └── adapter/
-                └── PortfolioContentPersistenceAdapter.java
+                ├── SiteContentPersistenceAdapter.java
+                └── SitePostPersistenceAdapter.java
 ```
 
 ---
 
 ## 11. Editorial flow
 
-### Edit and publish
+### Edit and publish a site
 
-1. A user creates a portfolio in PostgreSQL.
+1. A user creates a site in PostgreSQL.
 2. `version = 1` of the content is created in MongoDB as a draft.
-3. The user updates the draft via `PUT /admin/portfolios/{id}/draft`.
+3. The user updates the draft via `PUT /admin/sites/{id}/draft`.
 4. On publish:
    - The full document is validated
    - `currentPublishedVersion` is updated
@@ -843,10 +862,18 @@ src/main/java/com/cms/
    - Overwrite the current draft, or
    - Create a new draft version at `publishedVersion + 1`
 
+### Edit and publish a post
+
+Posts have their own independent draft/publish lifecycle:
+1. Create post via `POST /admin/sites/{id}/posts` — starts as unpublished
+2. Edit via `PUT /admin/sites/{id}/posts/{postId}`
+3. Publish via `POST /admin/sites/{id}/posts/{postId}/publish` — sets `published: true`
+4. The post card in `site_contents` draft must be updated to include the `postId` and then the site republished for the card to appear on the public site.
+
 ### Practical recommendation
 
 Start with the simplest scheme:
-- **1 active draft per portfolio**
+- **1 active draft per site**
 - **1 published version referenced from PostgreSQL**
 
 Do not add complex workflow until there is a real need for it.
@@ -855,7 +882,7 @@ Do not add complex workflow until there is a real need for it.
 
 ## 12. Public endpoint protection
 
-`GET /public/portfolios/{id}` is an unauthenticated endpoint. Two mitigations must be implemented before production.
+`GET /public/sites/{id}` is an unauthenticated endpoint. Two mitigations must be implemented before production.
 
 ### 12.1 Response caching — implement now
 
@@ -864,18 +891,18 @@ Published content does not change until the next `publish` action. It is an idea
 **Stack:** Spring Cache + Caffeine (in-memory). Migrate to Redis when running multiple instances.
 
 ```java
-@Cacheable(value = "published-portfolio", key = "#id")
-public PublicPortfolioResponse getPublished(UUID id) { ... }
+@Cacheable(value = "published-site", key = "#id")
+public PublicSiteResponse getPublished(UUID id) { ... }
 ```
 
-Cache invalidation: evict on `POST /admin/portfolios/{id}/publish`.
+Cache invalidation: evict on `POST /admin/sites/{id}/publish`.
 
 ```java
-@CacheEvict(value = "published-portfolio", key = "#id")
+@CacheEvict(value = "published-site", key = "#id")
 public void publish(UUID id) { ... }
 ```
 
-With caching in place, a flood of requests to the same portfolio hits memory, not the database.
+With caching in place, a flood of requests to the same site hits memory, not the database.
 
 ### 12.2 Rate limiting — implement now
 
@@ -909,60 +936,63 @@ Cloudflare or nginx in front of the API handles volumetric DDoS at the network l
 
 ---
 
-## 13. Confirmed decisions
+## 14. Confirmed decisions
 
 ### Keep
 - Normalized user identity schema: `users`, `user_credentials`, `user_oauth_providers`, `user_roles`, `user_profiles`
 - Multiple roles per user via `user_roles` join table — supports future pricing/plan models
 - `user_profiles` with `metadata JSONB` for free-form profile fields without migrations
 - All identity and auth tables in PostgreSQL — no MongoDB for user data
-- Portfolio content in MongoDB
+- Site content in MongoDB
+- `site` as the generic content unit — not tied to portfolio use case
 - Public endpoints separate from admin endpoints
 - Separate DTOs for admin and public responses
 - Bean Validation + domain rule validations
 - Draft/publish workflow — saving never auto-publishes
-- Single API serving both CMS UI and portfolio frontends
+- Single API serving both CMS UI and each user's frontend
+- Expandable content pattern: cards embedded in `site_contents`, full documents in separate collections (`site_posts`, future `site_projects`)
 
 ### Avoid
 - `password NOT NULL` on `users` — breaks OAuth users
 - Merging local auth and OAuth identity into a single table with nullable hacks
 - Slug as identifier — use UUID only
-- Forcing all portfolio data into relational tables
+- Forcing all site data into relational tables
 - Persisting `#` as a value for absent links — use `null`
 - Exposing persistence documents directly without DTOs
 - Coupling frontends to the exact persistence structure
-- Implementing `portfolio_publications` until there is a concrete use case
+- Implementing `site_publications` until there is a concrete use case
 
 ### Pending decisions
-- **OAuth2 social login** (Google, GitHub): schema is ready (`user_oauth_providers`). Implementation requires registering OAuth Apps, adding `spring-boot-starter-oauth2-client`, and writing the authorization code exchange endpoint. The email-as-identifier edge case must be resolved before implementing: if a user registers locally and then tries OAuth with the same email, decide whether to merge accounts or reject. Defer implementation until local auth is fully working.
+- **OAuth2 social login** (Google, GitHub): schema is ready (`user_oauth_providers`). Implementation requires registering OAuth Apps, adding `spring-boot-starter-oauth2-client`, and writing the authorization code exchange endpoint. The email-as-identifier edge case must be resolved before implementing: if a user registers locally and then tries OAuth with the same email, decide whether to merge accounts or reject. Defer until local auth is fully working.
 - **Pricing / plan tiers**: `user_roles` supports this already. When the time comes, add a `plans` table and either a `user_plan` column on `users` or a `user_plans` join table depending on whether a user can hold multiple plans simultaneously.
+- **Projects with individual pages**: when needed, follow the same pattern as `site_posts` — create `site_projects`, add `projectId` to the embedded card, add public and admin endpoints.
 
 ---
 
-## 14. MVP
+## 15. MVP
 
 ### Persistence
 - PostgreSQL:
   - `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
-  - `portfolios`
+  - `sites`
 - MongoDB:
-  - `portfolio_contents`
-  - `portfolio_posts`
+  - `site_contents`
+  - `site_posts`
 
 ### Minimum endpoints
 - `POST /auth/register`
 - `POST /auth/login`
-- `POST /admin/portfolios`
-- `GET /admin/portfolios` — authenticated user's portfolios only
-- `GET /admin/portfolios/{id}/draft`
-- `PUT /admin/portfolios/{id}/draft`
-- `POST /admin/portfolios/{id}/publish`
-- `GET /public/portfolios/{id}`
-- `POST /admin/portfolios/{id}/posts`
-- `PUT /admin/portfolios/{id}/posts/{postId}`
-- `POST /admin/portfolios/{id}/posts/{postId}/publish`
-- `GET /public/portfolios/{id}/posts`
-- `GET /public/portfolios/{id}/posts/{postId}`
+- `POST /admin/sites`
+- `GET /admin/sites` — authenticated user's sites only
+- `GET /admin/sites/{id}/draft`
+- `PUT /admin/sites/{id}/draft`
+- `POST /admin/sites/{id}/publish`
+- `GET /public/sites/{id}`
+- `POST /admin/sites/{id}/posts`
+- `PUT /admin/sites/{id}/posts/{postId}`
+- `POST /admin/sites/{id}/posts/{postId}/publish`
+- `GET /public/sites/{id}/posts`
+- `GET /public/sites/{id}/posts/{postId}`
 
 ### MVP content sections
 - `seo`
@@ -972,31 +1002,31 @@ Cloudflare or nginx in front of the API handles volumetric DDoS at the network l
 - `skills`
 - `jobs`
 - `projects` (embedded cards, no individual page yet)
-- `posts` (cards embedded in portfolio_contents, full documents in portfolio_posts)
+- `posts` (cards embedded in `site_contents`, full documents in `site_posts`)
 
 ---
 
-## 15. Confirmed architecture
+## 16. Confirmed architecture
 
-1. **PostgreSQL for users + portfolio metadata**
-2. **MongoDB for versioned portfolio content**
+1. **PostgreSQL for users + site metadata**
+2. **MongoDB for versioned site content**
 3. **Hexagonal architecture** with separate ports for public reading and administration
-4. **Aggregated document per version** to serve the full portfolio to the frontend in one call
+4. **Aggregated document per version** to serve the full site to the frontend in one call
 5. **Stable public DTOs** to avoid leaking internal details
 6. **Multi-user headless CMS** — the API serves JSON; each user integrates their own frontend
 7. **Single API** — no microservice split; admin and public concerns are separated logically, not by deployment
 
 ---
 
-## 16. Suggested next steps
+## 17. Suggested next steps
 
 Implement in this order:
 
-1. Drop existing `V1__create_users_table.sql` and rewrite as the full normalized user schema: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
+1. Rewrite `V1__create_users_table.sql` as the full normalized user schema: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
 2. Update `UserEntity` and related JPA entities to match the new schema; remove `UserDetails` implementation from the entity
-3. Flyway migration `V2__create_portfolios_table.sql` — no `slug` column
-4. JPA entity `PortfolioEntity`
-5. MongoDB document `PortfolioContentDocument`
+3. Flyway migration `V2__create_sites_table.sql`
+4. JPA entity `SiteEntity`
+5. MongoDB documents `SiteContentDocument` and `SitePostDocument`
 6. Domain ports (`domain/port/in/`, `domain/port/out/`)
-7. Use cases: create portfolio, edit draft, publish, get public
-8. Controllers `AdminPortfolioController` and `PublicPortfolioController`
+7. Use cases: create site, edit draft, publish site, create post, publish post, get public
+8. Controllers `AdminSiteController`, `AdminPostController`, and `PublicSiteController`
