@@ -80,7 +80,7 @@ src/main/java/com/cms/
 - **No REST controllers exist yet.**
 - **`src/test/` does not exist yet.**
 
-### Planned next (from architecture doc, section 16)
+### Planned next (from architecture doc, section 14)
 In this order:
 1. Rewrite `V1__create_users_table.sql` as normalized user schema: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
 2. Update `UserEntity` — remove `UserDetails` implementation from the JPA entity
@@ -95,86 +95,102 @@ In this order:
 
 ## Persistence strategy
 
-- **PostgreSQL**: identity (`users`), site and entry metadata (`sites`, `site_entries`). `ddl-auto: validate` — Hibernate does NOT manage schema; Flyway does.
-- **MongoDB**: editorial content in four collections:
-  - `site_drafts` — current draft per site (`content: {}` on create, `version` field for optimistic locking)
-  - `site_published` — published snapshot per site; deleted on unpublish
-  - `site_entry_drafts` — current draft per entry (`version` field)
-  - `site_entry_published` — published snapshot per entry; deleted on unpublish
-- Content is always `Map<String, Object>` — backend never interprets structure
-- `site_publications` (publication history) is **explicitly out of scope** for now
-- Flyway migrations live in `src/main/resources/db/migration/`. Naming: `V{n}__{description}.sql`
+**PostgreSQL** answers: *"what exists and who owns it?"*
+- Identity, ownership, relationships, navigation metadata (`type`, `sort_order`, `parent_id`)
+- **No `status` column** — publication state is determined by MongoDB document existence
+- `ddl-auto: validate` — Flyway manages schema
+
+**MongoDB** answers: *"what content does it have and is it published?"*
+- `site_drafts` — always exists, `content: {}` on create, `version` field for optimistic locking
+- `site_published` — its existence means the site is published; deleted on unpublish
+- `site_entry_drafts` — always exists, `version` field
+- `site_entry_published` — its existence means the entry is published; deleted on unpublish
+
+**No field is duplicated between the two databases.** They are complementary, not redundant.
+
+Flyway migrations: `src/main/resources/db/migration/V{n}__{description}.sql`
 
 ---
 
 ## Key design rules
 
 ### Identification
-- Sites and entries are identified by **UUID only** — no slug.
-- Public endpoint uses UUID. Slug-based URLs are the frontend's responsibility.
+- Sites and entries identified by **UUID only** — no slug
+- Public endpoint uses UUID; slug-based URLs are the frontend's responsibility
 
 ### Roles
 - `ADMIN` = access to `/admin/**` (future system operations)
 - `EDITOR` = manages own sites and entries via `/cms/**`
-- `VIEWER` is **dropped** until per-site collaboration exists
+- `VIEWER` dropped until per-site collaboration exists
 
-### Status
-- `DRAFT | PUBLISHED` only — `ARCHIVED` is dropped
-- Both `sites` and `site_entries` use the same enum
-- Both tables have `CHECK (status IN ('DRAFT','PUBLISHED'))`
+### Publication state
+- **No `status` field in PostgreSQL.** Published state = existence of `*_published` document in MongoDB
+- `site_published` exists → site is published. Does not exist → draft only
+- `site_entry_published` exists → entry is published. Does not exist → draft only
+- `GET /public/**` returns `404` when no published document exists
+- Unpublish **deletes** the `*_published` document
 
 ### Multi-user isolation
-- Each site has `ownerUserId`. Use cases must validate ownership — never rely on auth alone.
-- `GET /cms/sites` returns only the authenticated user's sites.
+- Each site has `ownerUserId`. Use cases must validate ownership — never rely on auth alone
+- `GET /cms/sites` returns only the authenticated user's sites
+- Published state for listing: batch query `site_published` by `siteId` list — not N+1
 
 ### Draft/publish workflow
-- Every site and entry has one draft document. Saving never auto-publishes.
-- `POST /cms/sites/{id}/publish` copies draft content → published document.
-- Public endpoints always read published documents — never drafts.
-- `POST /cms/sites/{id}/unpublish` **deletes** the published document. `GET /public/sites/{id}` returns `404` until next publish.
-- On create: draft document is initialized with `content: {}`. `GET .../draft` always returns `200` if the resource exists.
+- Every site and entry has one draft document, initialized with `content: {}`
+- `GET .../draft` always returns `200` if the resource exists
+- Saving never auto-publishes — autoguardado is a frontend concern
+- `POST .../publish` copies draft content → published document (overwrite if exists)
 
 ### Optimistic locking on drafts
-- Draft documents have a `version: Long` field, incremented on every save.
-- `GET .../draft` response includes `version`; expose as `ETag` header.
-- `PUT .../draft` **requires** `If-Match` header with current version.
-- Returns `412 Precondition Failed` if versions do not match.
-- Applies to both `site_drafts` and `site_entry_drafts`.
-- Frontend 412 handling: show "Someone else saved changes — reload to continue."
+- Draft documents have `version: Long`, incremented on every save
+- `GET .../draft` exposes `version` as `ETag` header
+- `PUT .../draft` **requires** `If-Match` header — returns `412` on mismatch
+- Frontend 412 handling: "Someone else saved changes — reload to continue"
+- Applies to both `site_drafts` and `site_entry_drafts`
+- PATCH metadata (`title`, `summary`, `contentSchema`) is last-write-wins — intentional
+
+### Content rules
+- Content is always `Map<String, Object>` — backend never interprets structure
+- `content` must be a JSON object (not null, not array)
+- **Maximum content size: 1MB** — validated in use case before writing to MongoDB
+- No typed section DTOs — ever
 
 ### Entry hierarchy (series)
-- Entries reference a parent via `parentId` (self-reference in `site_entries`).
-- Depth is unlimited — no 1-level restriction.
-- On every `PATCH .../entries/{id}` that sets `parentId`: use case walks the ancestor chain to detect cycles. Returns `400` if current entry appears in the chain.
-- `parentId` must reference an entry within the same site.
+- Entries reference parent via `parentId` (self-reference in `site_entries`)
+- Depth unlimited — no level restriction
+- `?parentId=root` = entries where `parent_id IS NULL`
+- On every PATCH that sets `parentId`: walk ancestor chain, return `400` if cycle detected
+- `parentId` must reference an entry within the same site
 
 ### Delete behavior
-- `DELETE /cms/sites/{id}` — cascades: all `site_entries`, all 4 MongoDB document types.
-- `DELETE /cms/sites/{id}/entries/{entryId}` with no children — deletes entry + draft + published docs.
-- `DELETE /cms/sites/{id}/entries/{entryId}` with children — returns `409`. Caller must delete children first.
+- `DELETE /cms/sites/{id}` — cascades: all `site_entries` + all 4 MongoDB document types
+- `DELETE .../entries/{entryId}` with no children — deletes row + draft doc + published doc
+- `DELETE .../entries/{entryId}` with children — returns `409`
 
 ### ?type filter — two-step query
-- `GET /public/sites/{id}/entries?type=post` queries PostgreSQL using index `(site_id, status, type)` → batch fetches MongoDB `site_entry_published` by the returned `entryId` list.
-- Do not attempt to filter by `type` directly in MongoDB — `type` lives in PostgreSQL.
+- `GET /public/sites/{id}/entries?type=post` queries PostgreSQL index `(site_id, type)` → batch fetches MongoDB `site_entry_published` by `entryId` list
+- Never filter by `type` directly in MongoDB — `type` lives in PostgreSQL
 
 ### contentSchema
-- `VARCHAR(100) NULL` on `sites`. Written by CMS UI (e.g. `"portfolio-v1"`).
-- Included in public response so the frontend can version its rendering logic.
-- Backend does not validate or interpret its value.
+- `VARCHAR(100) NULL` on `sites`. Written by CMS UI (e.g. `"portfolio-v1"`)
+- Included in public response for frontend rendering versioning
+- **Changing `contentSchema` in production is a breaking change for deployed frontends**
+- Backend does not validate or interpret its value
 
 ### API contracts
-- Public endpoints: `/public/sites/**` — no auth
-- CMS endpoints: `/cms/sites/**` — require authentication (user's own resources)
-- Auth endpoints: `/auth/**` — no auth required
-- Admin endpoints: `/admin/**` — reserved for future system-level operations
-- DTOs must be separate for public vs cms responses; never expose persistence documents directly
-- Content is `Map<String, Object>` in both request and response — no typed section DTOs
+- `/public/sites/**` — no auth
+- `/cms/sites/**` — JWT required (user's own resources)
+- `/auth/**` — no auth
+- `/admin/**` — reserved for future system-level operations
+- DTOs separate for public vs cms responses — never expose persistence documents directly
 
 ### Public endpoint protection
-`GET /public/sites/{id}` is unauthenticated. Two mitigations required before production:
+Two mitigations required before production:
+- **Response caching** (Spring Cache + Caffeine, `expireAfterWrite=1h`): evict on publish, unpublish, and delete. Migrate to Redis for multiple instances.
+- **Rate limiting** (Bucket4j): `/public/**` ~20 req/s per IP; `/cms/**` ~10 req/s per authenticated user. Returns `429`. In-memory to start.
 
-- **Response caching** (Spring Cache + Caffeine): evict on publish and unpublish. Migrate to Redis for multiple instances.
-- **Rate limiting** (Bucket4j): ~20 req/s per IP on `/public/**`, return `429`. In-memory to start.
+### Pagination
+- Public entries: `?limit=20` default, max `200`
 
 ---
 
@@ -183,14 +199,13 @@ In this order:
 `application-test.yml` activates with `spring.profiles.active=test`:
 - Uses `cms_db_test` (PostgreSQL) and `cms_content_test` (MongoDB)
 - `ddl-auto: create-drop` — Hibernate manages schema (no Flyway in tests)
-- Flyway is **disabled** in test profile
+- Flyway **disabled** in test profile
 
 ---
 
 ## API surface
 
-- Base path: `/api` (context path set in `application.yml`)
+- Base path: `/api` (context path in `application.yml`)
 - Swagger UI: `http://localhost:8080/api/swagger-ui.html`
-- API docs JSON: `http://localhost:8080/api/v3/api-docs`
+- API docs: `http://localhost:8080/api/v3/api-docs`
 - Auth: stateless JWT, header `Authorization: Bearer <token>`
-- Public auth endpoints: `/api/auth/**` (no token required)
