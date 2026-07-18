@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/cms_db_test
+    username: postgres
+    password: postgres
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/cms_content_test
+  flyway:
+    enabled: false
+
+logging:
+  level:
+    com.cms: DEBUG
