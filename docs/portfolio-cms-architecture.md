@@ -1,36 +1,41 @@
 # Architecture and data model — Headless CMS
 
+## Status
+This document reflects the current design decisions. It is a living document — update it before implementing any section.
+
+---
+
+## Strategic positioning
+
+**Target:** SaaS multi-tenant headless CMS. Initial user is the author (portfolio use case). Architecture is designed for B (multi-tenant SaaS), built for A first (single user, known use case).
+
+**Rule:** design for B, build for A. Decisions that are cheap now and expensive later are made now. Features that only make sense with real users are deferred.
+
+---
+
 ## Checklist
 
-- [x] Define the functional goal of the CMS
-- [x] Confirm headless multi-user model
-- [x] Decide on UUID-only identification (no slug)
-- [x] Confirm draft/publish as a required workflow
-- [x] Confirm single API serves both CMS UI and each user's frontend
-- [x] Rename portfolio → site for generality
-- [x] Replace typed content model with generic Map<String, Object>
-- [x] Replace PostCard with generic Entry entity
-- [x] Separate draft and published content into distinct documents
-- [x] Replace /admin prefix with /cms for user-owned resource endpoints
-- [x] Simplify roles: ADMIN + EDITOR only, drop VIEWER
-- [x] Drop ARCHIVED status — DRAFT | PUBLISHED only
-- [x] Add contentSchema field to sites
-- [x] Add optimistic locking (version + ETag/If-Match) on draft documents
-- [x] Define delete cascade behavior
-- [x] Define parentId cycle protection (depth-unlimited with cycle detection)
-- [x] Define unpublish semantics (delete *_published document)
-- [x] Define initial content state on create (content: {})
-- [x] Document ?type filter two-step query flow
-- [x] Remove status from PG — publication state determined by existence of *_published in Mongo
-- [x] Rename order → sort_order (SQL reserved word)
-- [x] Add cache TTL + evict on unpublish and delete
-- [x] Add rate limiting on /cms/** per authenticated user
-- [x] Add content size cap
-- [x] Add pagination on public entries
-- [x] Define top-level entries query convention (?parentId=root)
-- [x] Declare PATCH metadata as last-write-wins
-- [x] Document contentSchema as breaking change for consumers
-- [x] Document publish concurrency as last-write-wins (acceptable)
+- [x] Single database: PostgreSQL only — MongoDB removed
+- [x] JSONB for all content — same flexibility, one system
+- [x] ltree for entry hierarchy — replaces parent_id adjacency list
+- [x] No status column — publication state from row existence in site_published
+- [x] Optimistic locking on drafts (version + ETag/If-Match)
+- [x] Generic content model: Map<String, Object> for now
+- [x] /cms/** user resources, /public/** read-only, /auth/**, /admin/** reserved
+- [x] ADMIN + EDITOR roles only
+- [x] sort_order (not order)
+- [x] contentSchema on sites
+- [x] Delete cascade behavior defined
+- [x] Pagination on public entries
+- [x] ?parentId=root for top-level entries
+- [x] Rate limiting on /public/** and /cms/**
+- [x] Cache with TTL + evict on publish/unpublish/delete
+- [x] 1MB content size cap
+- [x] plan_id NULL on users (future monetization hook)
+- [x] site_collaborators table created empty (future per-site roles)
+- [x] media_assets table created empty (future uploads)
+- [x] site_domains table created empty (future custom domains)
+- [x] site_webhooks table created empty (future webhooks)
 
 ---
 
@@ -38,39 +43,40 @@
 
 | Decision | Resolution |
 |---|---|
-| System type | Headless CMS API — serves JSON, not HTML |
-| Consumers | CMS UI (admin) + each user's own frontend (public) |
-| Deployment | Single API — no microservice split needed at this stage |
-| Users | Multi-user; anyone can register and manage their own content |
-| Public identification | UUID only — no slug |
-| Draft/publish | Saving never auto-publishes. Draft and published are separate documents |
-| Publication state | Determined by existence of `*_published` document in MongoDB — no `status` field in PostgreSQL |
-| PG responsibility | "What exists and who owns it" — identity, ownership, relationships, navigation metadata |
-| Mongo responsibility | "What content does it have and is it published?" — all content, draft/published state |
-| No shared state | No field is duplicated between PG and Mongo. They are complementary, not redundant |
-| Autoguardado | Frontend concern — calls `PUT .../draft` periodically. Backend has no special logic |
-| Optimistic locking | `version: Long` on draft documents. `GET .../draft` returns ETag. `PUT .../draft` requires `If-Match`. Returns `412` on mismatch |
-| PATCH metadata | Last-write-wins — no optimistic locking on title/summary/contentSchema. Declared intentional |
-| Publish concurrency | Last-write-wins — two simultaneous publishes: last one wins. Acceptable for human click action |
-| Roles | `ADMIN` = access to `/admin/**`. `EDITOR` = manages own sites. `VIEWER` dropped |
-| Content model | `Map<String, Object>` — backend stores and serves without interpreting structure |
-| Content size cap | 1MB limit validated in use case on every `PUT .../draft`. Protects Mongo and memory |
-| contentSchema | `VARCHAR(100) NULL` on `sites`. Written by CMS UI. Included in public response. **Changing it in production is a breaking change for deployed frontends** |
-| Entry type | Frontend label — backend does not validate its value, only that it is non-blank |
-| Series / hierarchy | `parentId` self-reference on `site_entries`. Depth unlimited. Cycle detection on every PATCH that sets `parentId` |
-| Top-level entries query | `?parentId=root` returns entries where `parent_id IS NULL` |
-| Status | No `status` field — publication state derived from Mongo document existence |
-| Unpublish | Deletes `*_published` document. Public endpoint returns `404` until next publish |
-| Initial content | Draft created with `content: {}` on site/entry create. `GET .../draft` always `200` if resource exists |
-| Delete site | Cascades: all `site_entries`, all 4 MongoDB document types |
-| Delete entry without children | Deletes row + `site_entry_drafts` + `site_entry_published` |
-| Delete entry with children | Returns `409` — caller deletes children first |
-| Pagination | Public entries: default `limit=20`, max `limit=200`. Offset-based to start |
-| ?type filter | Two-step: query PG `(site_id, type)` → batch fetch Mongo `site_entry_published` by `entryId` list |
-| Rate limiting | `/public/**`: ~20 req/s per IP. `/cms/**`: ~10 req/s per authenticated user |
-| Cache | Caffeine with `expireAfterWrite=1h` as safety TTL. Evict on publish, unpublish, and delete |
-| sort_order | Column renamed from `order` (SQL reserved word) to `sort_order` |
+| Database | PostgreSQL only. JSONB for content. MongoDB removed |
+| Why single DB | Transactions, RLS, ltree, one system to operate — no cross-DB join in application layer |
+| PG responsibility | Everything: identity, metadata, content (JSONB), publication state (row existence) |
+| Publication state | Row existence in `site_published` / `site_entry_published`. No status column |
+| Content model | `JSONB` column — `Map<String, Object>` at application level. Backend does not interpret structure |
+| Content size cap | 1MB — validated in use case before writing |
+| Entry hierarchy | `ltree` extension. `path LTREE` column on `site_entries`. Cycles impossible by construction |
+| Top-level entries | `?parentId=root` = entries where path is depth 1 |
+| Optimistic locking | `version: Long` on draft rows. ETag/If-Match. 412 on mismatch |
+| PATCH metadata | Last-write-wins — intentional |
+| Publish | Upsert into `site_published` in a single transaction. Copies draft content |
+| Unpublish | Deletes row from `site_published`. Public returns 404 |
+| Delete site | Transaction: deletes `site_entries`, `site_drafts`, `site_published`, all entry drafts/published |
+| Delete entry without children | Deletes row + draft + published rows |
+| Delete entry with children | Returns 409 |
+| Roles | `ADMIN` = `/admin/**`. `EDITOR` = own sites via `/cms/**`. VIEWER dropped |
+| Per-site collaboration | `site_collaborators` table created, no logic yet |
+| contentSchema | `VARCHAR(100) NULL`. Breaking change for consumers if modified in production |
+| Pagination | Public entries: default 20, max 200 |
+| ?type filter | Query PG `(site_id, type)` index → no secondary fetch needed (content in same DB) |
+| Rate limiting | `/public/**` ~20 req/s per IP; `/cms/**` ~10 req/s per user |
+| Cache | Caffeine `expireAfterWrite=1h`. Evict on publish, unpublish, delete |
+| Autoguardado | Frontend concern. Backend exposes `PUT .../draft` |
+| Concurrent publish | Last-write-wins — acceptable for human action |
+| plan_id | `UUID NULL` on `users` — hook for future monetization. No logic yet |
+| Media | `media_assets` table created. No upload logic yet |
+| Custom domains | `site_domains` table created. No logic yet |
+| Webhooks | `site_webhooks` table created. No logic yet |
+| content_types | Deferred — implement when second type of client has different schema needs |
+| RLS | Deferred — implement when enterprise clients require engine-level tenant isolation |
+| i18n | Deferred — implement when a concrete client requests it |
+| Preview tokens | Deferred — implement when a client has a static frontend |
 | JWT refresh/revocation | Pending — not defined yet |
+| OAuth2 social login | Pending — schema ready. Resolve email-merge edge case first |
 
 ---
 
@@ -78,7 +84,7 @@
 
 This backend is a **multi-user headless CMS**. It does not render HTML — it delivers JSON.
 
-A **site** is the root publishable unit. It can represent a portfolio, blog, product page, CV, or anything else. A site contains **entries** — any piece of content that needs its own page (posts, projects, series, etc.).
+A **site** is the root publishable unit. It can represent a portfolio, blog, product page, CV, or anything else. A site contains **entries** — any content with its own page (posts, projects, series, etc.).
 
 Two consumer types from a single API:
 - **CMS UI** — logs in, edits drafts, publishes
@@ -94,7 +100,7 @@ Two consumer types from a single API:
 
 **B. Site Management** — sites, entries, draft/publish lifecycle
 
-**C. Public Content Delivery** — public endpoints, always serves published documents
+**C. Public Content Delivery** — public endpoints, always serves published rows
 
 ---
 
@@ -114,115 +120,107 @@ Two consumer types from a single API:
 
 ### 2.3 Persistence strategy
 
-**PostgreSQL** answers: *"what exists and who owns it?"*
-- Identity, ownership, relationships, navigation metadata
-- Never stores content or publication state
+**Single database: PostgreSQL.**
 
-**MongoDB** answers: *"what content does it have and is it published?"*
-- All content as `Map<String, Object>`
-- Publication state determined by document existence: `site_published` exists = published
-
-**No field is duplicated between the two databases.** They are complementary.
-
-The only cross-database join happens in the application layer as a batch query — never N+1.
+- Metadata and identity: normalized relational tables
+- Content: `JSONB` columns — flexible schema, GIN-indexable, TOAST for large values
+- Publication state: row existence in `site_published` / `site_entry_published`
+- Hierarchy: `ltree` extension on `site_entries`
+- All operations within a single transaction when needed
 
 ---
 
 ## 3. Domain model
 
-### 3.1 `Site` — PostgreSQL
+### 3.1 `Site`
 
 ```text
 Site
 - id: UUID
 - ownerUserId: Long
 - title: String
-- summary: String              ← CMS listing metadata, not derived from content
-- contentSchema: String?       ← e.g. "portfolio-v1". Hint for public frontend rendering.
-                                  Changing this in production is breaking for deployed frontends.
+- summary: String          ← CMS listing metadata, not derived from content
+- contentSchema: String?   ← e.g. "portfolio-v1". Hint for frontend rendering.
+                              Changing in production is breaking for deployed frontends.
 - createdAt: Instant
 - updatedAt: Instant
 ```
 
 ---
 
-### 3.2 `SiteEntry` — PostgreSQL
+### 3.2 `SiteEntry`
 
 ```text
 SiteEntry
 - id: UUID
 - siteId: UUID
-- parentId: UUID?              ← null = top-level. References another entry for hierarchy/series
-- type: String                 ← frontend label: "post", "project", "series" — not validated by backend
+- path: LTree              ← e.g. "root.series_uuid.entry_uuid"
+- type: String             ← frontend label: "post", "project", "series" — not validated
 - sortOrder: Integer?
 - createdAt: Instant
 - updatedAt: Instant
 ```
 
-**Hierarchy rules:**
-- Depth unlimited. No maximum nesting level enforced.
-- On every PATCH that sets `parentId`: walk the ancestor chain. If the current entry appears in it, return `400 Cycle detected`.
-- `parentId` must reference an entry within the same site.
-- `?parentId=root` in queries means `parent_id IS NULL` — returns top-level entries.
+**ltree rules:**
+- Root entries: path = `root.{entryId}`
+- Children: path = `parent.path.{entryId}`
+- Descendants of X: `WHERE path <@ 'root.seriesId'`
+- Ancestors of X: `WHERE path @> 'root.seriesId.entryId'`
+- Move entry (and all descendants) to new parent: update path in a single transaction
+- Cycles: **impossible by construction** — ltree is acyclic by definition
+
+**Querying:**
+- `?parentId=root` → `WHERE site_id = ? AND nlevel(path) = 1`
+- `?parentId={id}` → `WHERE path <@ '{parentPath}.{id}' AND nlevel(path) = nlevel(parentPath)+2`
 
 ---
 
-### 3.3 Content documents — MongoDB
+### 3.3 Draft and published rows
 
-Content is always `Map<String, Object>`. Backend never interprets structure.
-Maximum content size: **1MB** — validated in use case before writing to Mongo.
+All content is `JSONB`. Backend never interprets structure. Maximum size: **1MB**.
 
 #### `site_drafts`
 ```text
-SiteDraftDocument
-- id: ObjectId
-- siteId: UUID
-- version: Long                ← starts at 1, incremented on every save
-- content: Map<String, Object>
-- updatedAt: Instant
+- id: UUID PK (= siteId, 1:1)
+- site_id: UUID UNIQUE FK sites(id)
+- version: Long            ← optimistic locking, starts at 1
+- content: JSONB
+- updated_at: Timestamp
 ```
-One per site. Created with `content: {}` when site is created. Overwritten on every save.
+Created with `content: '{}'` when site is created. Upserted on every save.
 
 #### `site_published`
 ```text
-SitePublishedDocument
-- id: ObjectId
-- siteId: UUID
-- content: Map<String, Object> ← snapshot from draft at publish time
-- publishedAt: Instant
+- id: UUID PK (= siteId, 1:1)
+- site_id: UUID UNIQUE FK sites(id)
+- content: JSONB           ← snapshot from draft at publish time
+- published_at: Timestamp
 ```
-One per site. **Its existence means the site is published.**
-Created/overwritten on publish. **Deleted on unpublish or site delete.**
+**Its existence means the site is published.** Created/overwritten on publish. Deleted on unpublish or site delete.
 
 #### `site_entry_drafts`
 ```text
-SiteEntryDraftDocument
-- id: ObjectId
-- entryId: UUID
-- siteId: UUID
-- version: Long                ← optimistic locking
-- content: Map<String, Object>
-- updatedAt: Instant
+- id: UUID PK (= entryId, 1:1)
+- entry_id: UUID UNIQUE FK site_entries(id)
+- site_id: UUID FK sites(id)
+- version: Long
+- content: JSONB
+- updated_at: Timestamp
 ```
-One per entry. Created with `content: {}` on entry creation.
 
 #### `site_entry_published`
 ```text
-SiteEntryPublishedDocument
-- id: ObjectId
-- entryId: UUID
-- siteId: UUID
-- content: Map<String, Object>
-- publishedAt: Instant
+- id: UUID PK (= entryId, 1:1)
+- entry_id: UUID UNIQUE FK site_entries(id)
+- site_id: UUID FK sites(id)
+- content: JSONB
+- published_at: Timestamp
 ```
-One per entry. **Its existence means the entry is published.**
-**Deleted on unpublish or entry/site delete.**
+**Its existence means the entry is published.** Deleted on unpublish or delete.
 
 ---
 
-### 3.4 Optimistic locking on drafts
-
-Prevents two browser tabs or concurrent users from silently overwriting each other.
+### 3.4 Optimistic locking
 
 ```
 GET /cms/sites/{id}/draft
@@ -232,60 +230,56 @@ GET /cms/sites/{id}/draft
 PUT /cms/sites/{id}/draft
     If-Match: "3"
     Body: { "content": {...} }
-← 200 { "content": {...}, "version": 4 }   ← version incremented
+← 200 { "content": {...}, "version": 4 }
 ← 412 if server version != 3
 ```
 
-Frontend 412 handling: *"Someone else saved changes since you opened this draft. Reload to continue."*
+Frontend 412 handling: *"Someone else saved changes. Reload to continue."*
 
-Same pattern applies to `site_entry_drafts`.
-
-**PATCH metadata** (`title`, `summary`, `contentSchema`) is last-write-wins — no optimistic locking. Metadata edits are infrequent and manual.
-
-**Concurrent publish** is last-write-wins — two simultaneous publish clicks: last one wins. Acceptable for a human action.
+PATCH metadata (`title`, `summary`, `contentSchema`) is last-write-wins — intentional.
 
 ---
 
-### 3.5 Example documents
+### 3.5 Publish transaction
+
+```sql
+BEGIN;
+  INSERT INTO site_published (site_id, content, published_at)
+  SELECT site_id, content, NOW() FROM site_drafts WHERE site_id = ?
+  ON CONFLICT (site_id) DO UPDATE
+    SET content = EXCLUDED.content, published_at = EXCLUDED.published_at;
+  -- update sites.updated_at if needed
+COMMIT;
+```
+
+Single transaction. No cross-database inconsistency possible.
+
+---
+
+### 3.6 Example content (JSONB)
 
 ```json
-// site_drafts
+// site_drafts.content — portfolio
 {
-  "siteId": "b7fd3b44-...",
-  "version": 3,
-  "content": {
-    "seo": { "title": "Santiago | Backend Dev", "description": "..." },
-    "hero": { "greeting": "Hi, I'm", "name": "Santiago" },
-    "skills": [{ "name": "Java", "slug": "openjdk" }]
-  },
-  "updatedAt": "2026-07-18T10:00:00Z"
+  "seo": { "title": "Santiago | Backend Dev", "description": "..." },
+  "hero": { "greeting": "Hi, I'm", "name": "Santiago" },
+  "skills": [{ "name": "Java", "slug": "openjdk" }],
+  "jobs": [{ "company": "Acme", "role": "Backend Dev" }]
 }
 
-// site_entry_drafts — a post
+// site_entry_drafts.content — blog post
 {
-  "entryId": "c1d2e3f4-...",
-  "siteId": "b7fd3b44-...",
-  "version": 1,
-  "content": {
-    "title": "Designing hexagonal APIs",
-    "date": "2026-07-18",
-    "body": "# Introduction\n\nHexagonal architecture separates...",
-    "tags": ["architecture", "spring"],
-    "readTime": "8 min read"
-  },
-  "updatedAt": "2026-07-18T10:00:00Z"
+  "title": "Designing hexagonal APIs",
+  "date": "2026-07-18",
+  "body": "# Introduction\n\nHexagonal architecture separates...",
+  "tags": ["architecture", "spring"],
+  "readTime": "8 min read"
 }
 
-// site_entry_drafts — a series index
+// site_entry_drafts.content — series index
 {
-  "entryId": "series-uuid-...",
-  "siteId": "b7fd3b44-...",
-  "version": 1,
-  "content": {
-    "title": "Hexagonal Architecture Series",
-    "description": "A 3-part series on building clean Java backends."
-  },
-  "updatedAt": "2026-07-18T10:00:00Z"
+  "title": "Hexagonal Architecture Series",
+  "description": "A 3-part series on building clean Java backends."
 }
 ```
 
@@ -301,6 +295,7 @@ users
 - email         VARCHAR(100) NOT NULL UNIQUE
 - name          VARCHAR(100) NOT NULL
 - enabled       BOOLEAN NOT NULL DEFAULT TRUE
+- plan_id       UUID NULL FK plans(id)    ← NULL until monetization is implemented
 - created_at    TIMESTAMP NOT NULL
 - updated_at    TIMESTAMP NOT NULL
 
@@ -317,7 +312,7 @@ user_credentials
 - user_id       BIGINT PK FK users(id)
 - password_hash VARCHAR(255) NOT NULL
 - created_at    TIMESTAMP NOT NULL
-- updated_at    TIMESTAMP NOT NULL     ← password rotation tracking
+- updated_at    TIMESTAMP NOT NULL
 
 user_oauth_providers
 - id                BIGSERIAL PK
@@ -341,6 +336,8 @@ user_profiles
 ### Sites and entries
 
 ```sql
+CREATE EXTENSION IF NOT EXISTS ltree;
+
 sites
 - id                UUID PK
 - owner_user_id     BIGINT NOT NULL FK users(id)
@@ -350,295 +347,394 @@ sites
 - created_at        TIMESTAMP NOT NULL
 - updated_at        TIMESTAMP NOT NULL
 
--- No status column. Published state = existence of site_published in MongoDB.
+-- No status column. Published = row exists in site_published.
 
 site_entries
 - id                UUID PK
 - site_id           UUID NOT NULL FK sites(id)
-- parent_id         UUID NULL FK site_entries(id)
+- path              LTREE NOT NULL
 - type              VARCHAR(50) NOT NULL
-- sort_order        INT NULL                    ← renamed from 'order' (SQL reserved word)
+- sort_order        INT NULL
 - created_at        TIMESTAMP NOT NULL
 - updated_at        TIMESTAMP NOT NULL
 
--- No status column. Published state = existence of site_entry_published in MongoDB.
+-- No status column. Published = row exists in site_entry_published.
 
-CREATE INDEX idx_site_entries_site_id   ON site_entries (site_id);
-CREATE INDEX idx_site_entries_filter    ON site_entries (site_id, type);
-CREATE INDEX idx_site_entries_parent    ON site_entries (site_id, parent_id);
+CREATE INDEX idx_site_entries_path_gist ON site_entries USING GIST (path);
+CREATE INDEX idx_site_entries_site_path ON site_entries (site_id, path);
+CREATE INDEX idx_site_entries_type      ON site_entries (site_id, type);
+
+site_drafts
+- site_id           UUID PK FK sites(id)
+- version           BIGINT NOT NULL DEFAULT 1
+- content           JSONB NOT NULL DEFAULT '{}'
+- updated_at        TIMESTAMP NOT NULL
+
+site_published
+- site_id           UUID PK FK sites(id)
+- content           JSONB NOT NULL
+- published_at      TIMESTAMP NOT NULL
+
+site_entry_drafts
+- entry_id          UUID PK FK site_entries(id)
+- site_id           UUID NOT NULL FK sites(id)
+- version           BIGINT NOT NULL DEFAULT 1
+- content           JSONB NOT NULL DEFAULT '{}'
+- updated_at        TIMESTAMP NOT NULL
+
+site_entry_published
+- entry_id          UUID PK FK site_entries(id)
+- site_id           UUID NOT NULL FK sites(id)
+- content           JSONB NOT NULL
+- published_at      TIMESTAMP NOT NULL
+
+CREATE INDEX idx_entry_published_site ON site_entry_published (site_id);
 ```
 
-### Optional (future)
+### Future tables — created now, no logic yet
 
 ```sql
+-- Per-site collaboration (future roles per site)
+site_collaborators
+- site_id       UUID NOT NULL FK sites(id)
+- user_id       BIGINT NOT NULL FK users(id)
+- role          VARCHAR(30) NOT NULL   -- OWNER | EDITOR | AUTHOR | VIEWER
+- PK (site_id, user_id)
+
+-- Media uploads
 media_assets
 - id            UUID PK
-- owner_user_id BIGINT NOT NULL
+- owner_user_id BIGINT NOT NULL FK users(id)
+- site_id       UUID NULL FK sites(id)
 - storage_key   VARCHAR(255) NOT NULL UNIQUE
 - public_url    VARCHAR(500) NOT NULL
 - alt           VARCHAR(255) NULL
 - mime_type     VARCHAR(100) NOT NULL
+- size_bytes    INT NOT NULL
+- created_at    TIMESTAMP NOT NULL
+
+-- Custom domains
+site_domains
+- id            UUID PK
+- site_id       UUID NOT NULL FK sites(id)
+- domain        VARCHAR(255) NOT NULL UNIQUE
+- verified      BOOLEAN NOT NULL DEFAULT FALSE
+- dns_challenge JSONB NULL
+- created_at    TIMESTAMP NOT NULL
+
+-- Webhooks on publish/unpublish
+site_webhooks
+- id            UUID PK
+- site_id       UUID NOT NULL FK sites(id)
+- url           VARCHAR(500) NOT NULL
+- events        TEXT[] NOT NULL   -- ['publish', 'unpublish', 'delete']
+- secret        VARCHAR(255) NULL
+- created_at    TIMESTAMP NOT NULL
+
+-- Pricing plans (future)
+plans
+- id            UUID PK
+- name          VARCHAR(50) NOT NULL UNIQUE   -- FREE | PRO | BUSINESS
+- max_sites     INT NOT NULL
+- max_entries   INT NOT NULL
+- max_storage_mb INT NOT NULL
 - created_at    TIMESTAMP NOT NULL
 ```
 
 ---
 
-## 5. MongoDB indexes
+## 5. Endpoints
 
-```text
-site_drafts
-  - unique: siteId
-
-site_published
-  - unique: siteId
-
-site_entry_drafts
-  - unique: entryId
-  - index: siteId
-
-site_entry_published
-  - unique: entryId
-  - index: siteId
-  - index: (siteId, entryId)   ← batch fetch by site + list of entryIds
-```
-
----
-
-## 6. Endpoints
-
-### 6.1 Authentication
+### 5.1 Authentication
 ```
 POST /auth/register
 POST /auth/login
 ```
 
-### 6.2 /cms — authenticated, user's own resources
+### 5.2 /cms — authenticated, user's own resources
 
 **Sites**
 ```
 POST   /cms/sites
-GET    /cms/sites                          ← user's sites + published state (batch Mongo query)
+GET    /cms/sites                     ← user's sites; published state from site_published JOIN
 GET    /cms/sites/{id}
-PATCH  /cms/sites/{id}                     ← title, summary, contentSchema (last-write-wins)
-DELETE /cms/sites/{id}                     ← cascades all entries and all MongoDB documents
+PATCH  /cms/sites/{id}                ← title, summary, contentSchema (last-write-wins)
+DELETE /cms/sites/{id}                ← transaction: cascades entries, drafts, published rows
 ```
 
 **Site draft/publish**
 ```
-GET    /cms/sites/{id}/draft               ← returns content + version as ETag
-PUT    /cms/sites/{id}/draft               ← If-Match required; 412 on mismatch; 1MB limit
-POST   /cms/sites/{id}/publish             ← copies draft → site_published
-POST   /cms/sites/{id}/unpublish           ← deletes site_published
+GET    /cms/sites/{id}/draft          ← content + version as ETag
+PUT    /cms/sites/{id}/draft          ← If-Match required; 412 on mismatch; 1MB cap
+POST   /cms/sites/{id}/publish        ← upserts site_published in transaction
+POST   /cms/sites/{id}/unpublish      ← deletes site_published row
 ```
 
 **Entries**
 ```
 POST   /cms/sites/{id}/entries
-GET    /cms/sites/{id}/entries             ← ?type=post, ?parentId=root, ?parentId={uuid}
+GET    /cms/sites/{id}/entries        ← ?type=post, ?parentId=root, ?parentId={uuid}
 GET    /cms/sites/{id}/entries/{entryId}
-PATCH  /cms/sites/{id}/entries/{entryId}   ← type, sort_order, parentId (cycle-checked)
-DELETE /cms/sites/{id}/entries/{entryId}   ← 409 if has children; cascades MongoDB docs
+PATCH  /cms/sites/{id}/entries/{entryId}   ← type, sort_order, parentId (ltree path update)
+DELETE /cms/sites/{id}/entries/{entryId}   ← 409 if has children; cascades drafts/published
 ```
 
 **Entry draft/publish**
 ```
 GET    /cms/sites/{id}/entries/{entryId}/draft
-PUT    /cms/sites/{id}/entries/{entryId}/draft     ← If-Match required; 412 on mismatch; 1MB limit
+PUT    /cms/sites/{id}/entries/{entryId}/draft     ← If-Match required; 412 on mismatch; 1MB cap
 POST   /cms/sites/{id}/entries/{entryId}/publish
-POST   /cms/sites/{id}/entries/{entryId}/unpublish ← deletes site_entry_published
+POST   /cms/sites/{id}/entries/{entryId}/unpublish ← deletes site_entry_published row
 ```
 
-### 6.3 /public — unauthenticated read-only
+### 5.3 /public — unauthenticated read-only
 ```
 GET /public/sites/{id}
-    ← published site content + contentSchema
-    ← 404 if site_published does not exist
+    ← site_published content + contentSchema
+    ← 404 if no site_published row
 
 GET /public/sites/{id}/entries
+    ← entries with existing site_entry_published row
     ← ?type=post, ?parentId=root, ?parentId={uuid}
     ← ?limit=20 (default), max 200
-    ← only entries with existing site_entry_published document
-    ← two-step: query PG (site_id, type) → batch fetch Mongo by entryId list
 
 GET /public/sites/{id}/entries/{entryId}
-    ← 404 if site_entry_published does not exist
+    ← 404 if no site_entry_published row
 ```
 
-### 6.4 /admin — reserved for future system-level operations
+### 5.4 /admin — reserved, not implemented
 ```
-(not implemented yet)
 GET /admin/users
 GET /admin/sites
 ```
 
 ---
 
-## 7. Editorial flow
+## 6. Editorial flow
 
 ### Site
-1. Create → `sites` row inserted, `site_drafts` created `{ content: {}, version: 1 }`
+1. Create → `sites` row + `site_drafts` row `{ content: '{}', version: 1 }`
 2. Edit → `PUT /cms/sites/{id}/draft` with `If-Match: {version}` → version incremented
-3. Publish → `site_drafts.content` copied to `site_published` (overwrite if exists)
-4. Public reads `site_published` — 404 if document absent
-5. Unpublish → `site_published` deleted → public returns 404
+3. Publish → transaction: upsert `site_published` from `site_drafts.content`
+4. Public reads `site_published` — 404 if row absent
+5. Unpublish → delete `site_published` row
 
 ### Entry
-Same flow, independent from site lifecycle:
-1. Create → `site_entries` row, `site_entry_drafts` created `{ content: {}, version: 1 }`
+Same flow, independent lifecycle:
+1. Create → `site_entries` row (path assigned) + `site_entry_drafts` row `{ content: '{}', version: 1 }`
 2. Edit → `PUT .../draft` with `If-Match`
-3. Publish → draft copied to `site_entry_published`
-4. Unpublish → `site_entry_published` deleted
+3. Publish → upsert `site_entry_published`
+4. Unpublish → delete `site_entry_published` row
 
 ### Published state in CMS listing
-
-`GET /cms/sites` flow:
+```sql
+SELECT s.*, sp.published_at IS NOT NULL AS is_published
+FROM sites s
+LEFT JOIN site_published sp ON sp.site_id = s.id
+WHERE s.owner_user_id = ?
 ```
-1. SELECT id, title, summary, content_schema, created_at, updated_at
-   FROM sites WHERE owner_user_id = ?
-   → list of siteIds
+Single query. No application-layer join needed.
 
-2. db.site_published.find({ siteId: { $in: siteIds } }, { siteId: 1 })
-   → set of published siteIds
-
-3. Merge in application layer → each site gets isPublished: boolean
+### Move entry to new parent (ltree)
+```sql
+BEGIN;
+  UPDATE site_entries
+  SET path = ? || subpath(path, nlevel(old_parent_path))
+  WHERE site_id = ? AND path <@ old_entry_path;
+COMMIT;
 ```
-
-Single batch query — not N+1.
+Moves entry and all descendants atomically.
 
 ### Series
-1. Create entry with `type: "series"`
-2. Create children with `parentId = seriesEntryId`
-3. `GET .../entries?parentId={seriesId}` returns published children ordered by `sort_order`
-4. `GET .../entries?parentId=root` returns top-level entries (parent_id IS NULL)
+1. Create entry with `type: "series"` → path = `root.{seriesId}`
+2. Create children → path = `root.{seriesId}.{entryId}`
+3. `GET .../entries?parentId={seriesId}` → `WHERE path <@ 'root.seriesId' AND nlevel(path) = 2`
+4. No cycle detection needed — ltree is acyclic by construction
 
 ### Delete cascade
-- `DELETE /cms/sites/{id}` → deletes `site_entries`, `site_drafts`, `site_published`, all `site_entry_drafts`, all `site_entry_published`
-- `DELETE .../entries/{entryId}` with no children → entry row + draft doc + published doc
-- `DELETE .../entries/{entryId}` with children → `409 Conflict`
-
-### Cycle detection on parentId
-On every `PATCH .../entries/{entryId}` that sets `parentId`:
-```java
-UUID cursor = newParentId;
-while (cursor != null) {
-    if (cursor.equals(entryId)) throw CycleDetectedException(); // 400
-    cursor = entryRepository.findById(cursor).parentId;
-}
+```sql
+BEGIN;
+  -- Check no children
+  -- Delete entry_published, entry_drafts, site_entries row
+COMMIT;
 ```
 
 ---
 
-## 8. Business validations
+## 7. Business validations
 
 ### Site
 - `title` required
-- Ownership validated in use case — not only in authentication
-- Only `EDITOR` role may write (own sites only)
+- Ownership validated in use case
+- Only `EDITOR` role may write
 
 ### SiteEntry
 - `type` required, non-blank
 - `parentId` if set must reference an entry within the same site
-- Cycle detection on every PATCH that sets `parentId`
+- No cycle detection needed — ltree handles it
 
-### Content documents
-- `content` must be a valid JSON object — not null, not an array
-- `content` serialized size must not exceed **1MB**
+### Content
+- Must be valid JSON object — not null, not array
+- Serialized size ≤ 1MB
 - Backend does not validate internal structure
+
+---
+
+## 8. Package structure
+
+```text
+src/main/java/com/cms/
+├── domain/
+│   ├── model/
+│   │   ├── user/
+│   │   │   └── User.java
+│   │   └── site/
+│   │       ├── Site.java
+│   │       ├── SiteEntry.java
+│   │       └── PublicationStatus.java
+│   └── port/
+│       ├── in/
+│       │   ├── site/
+│       │   │   ├── CreateSiteUseCase.java
+│       │   │   ├── UpdateSiteDraftUseCase.java
+│       │   │   ├── PublishSiteUseCase.java
+│       │   │   ├── UnpublishSiteUseCase.java
+│       │   │   ├── DeleteSiteUseCase.java
+│       │   │   └── GetSitePublicUseCase.java
+│       │   └── entry/
+│       │       ├── CreateEntryUseCase.java
+│       │       ├── UpdateEntryDraftUseCase.java
+│       │       ├── PublishEntryUseCase.java
+│       │       ├── UnpublishEntryUseCase.java
+│       │       ├── DeleteEntryUseCase.java
+│       │       └── GetEntryPublicUseCase.java
+│       └── out/
+│           ├── SiteRepository.java
+│           ├── SiteDraftRepository.java
+│           ├── SitePublishedRepository.java
+│           ├── SiteEntryRepository.java
+│           ├── SiteEntryDraftRepository.java
+│           └── SiteEntryPublishedRepository.java
+├── application/
+│   └── usecase/
+│       ├── site/
+│       │   ├── CreateSiteService.java
+│       │   ├── UpdateSiteDraftService.java
+│       │   ├── PublishSiteService.java
+│       │   ├── UnpublishSiteService.java
+│       │   ├── DeleteSiteService.java
+│       │   └── GetSitePublicService.java
+│       └── entry/
+│           ├── CreateEntryService.java
+│           ├── UpdateEntryDraftService.java
+│           ├── PublishEntryService.java
+│           ├── UnpublishEntryService.java
+│           ├── DeleteEntryService.java
+│           └── GetEntryPublicService.java
+└── adapters/
+    ├── in/web/
+    │   ├── controller/
+    │   │   ├── AuthController.java
+    │   │   ├── CmsSiteController.java
+    │   │   ├── CmsEntryController.java
+    │   │   └── PublicSiteController.java
+    │   └── dto/
+    │       ├── request/
+    │       └── response/
+    └── out/persistence/jpa/
+        ├── entity/
+        │   ├── UserEntity.java
+        │   ├── SiteEntity.java
+        │   ├── SiteEntryEntity.java
+        │   ├── SiteDraftEntity.java
+        │   ├── SitePublishedEntity.java
+        │   ├── SiteEntryDraftEntity.java
+        │   └── SiteEntryPublishedEntity.java
+        ├── repository/
+        │   ├── UserJpaRepository.java
+        │   ├── SiteJpaRepository.java
+        │   ├── SiteEntryJpaRepository.java
+        │   ├── SiteDraftJpaRepository.java
+        │   ├── SitePublishedJpaRepository.java
+        │   ├── SiteEntryDraftJpaRepository.java
+        │   └── SiteEntryPublishedJpaRepository.java
+        └── adapter/
+            ├── SitePersistenceAdapter.java
+            ├── SiteEntryPersistenceAdapter.java
+            ├── SiteDraftPersistenceAdapter.java
+            ├── SitePublishedPersistenceAdapter.java
+            ├── SiteEntryDraftPersistenceAdapter.java
+            └── SiteEntryPublishedPersistenceAdapter.java
+```
 
 ---
 
 ## 9. Public endpoint protection
 
-### Response caching — implement now
-Spring Cache + Caffeine.
-- `expireAfterWrite = 1h` — safety TTL in case eviction fails
-- Evict on: publish, unpublish, delete (site and entry)
+### Response caching
+Spring Cache + Caffeine. `expireAfterWrite=1h`. Evict on publish, unpublish, delete.
+Migrate to Redis for multiple instances.
 
-```java
-@Cacheable(value = "published-site", key = "#id")
-public PublicSiteResponse getPublished(UUID id) { ... }
-
-@CacheEvict(value = "published-site", key = "#id")
-public void publish(UUID id) { ... }
-
-@CacheEvict(value = "published-site", key = "#id")
-public void unpublish(UUID id) { ... }
-
-@CacheEvict(value = "published-site", key = "#id")
-public void delete(UUID id) { ... }
-```
-
-Migrate to Redis when running multiple instances.
-
-### Rate limiting — implement now
+### Rate limiting
 Bucket4j:
 - `/public/**`: ~20 req/s per IP → `429`
 - `/cms/**`: ~10 req/s per authenticated user → `429`
-
-In-memory to start, Redis-backed when scaling.
-
-### UUID obscurity — in place
-UUID v4 space is 2^122 — brute force enumeration infeasible.
 
 ### CDN / reverse proxy — future
 Cloudflare or nginx for volumetric DDoS.
 
 ---
 
-## 10. Image strategy
-
-**Phase 1:** URLs only — CDN, Cloudinary, S3, static assets.
-
-**Phase 2 (future):** `media` module, upload to backend, store in `media_assets`, return public URL.
-
----
-
-## 11. Confirmed decisions
+## 10. Confirmed decisions
 
 ### Keep
-- Normalized user schema: `users`, `user_credentials` (with `updated_at`), `user_oauth_providers`, `user_roles`, `user_profiles`
-- `ADMIN` + `EDITOR` only — `VIEWER` dropped
-- No `status` column in `sites` or `site_entries` — publication state from Mongo document existence
-- PG = ownership + relationships + navigation metadata. Mongo = content + publication state
-- `Map<String, Object>` for all content, 1MB cap
-- `contentSchema` on sites — **breaking change for consumers if modified in production**
-- Separate MongoDB documents for draft and published
+- PostgreSQL only — MongoDB removed
+- JSONB for all content
+- ltree for entry hierarchy
+- No status column — row existence = published
 - Optimistic locking on drafts (version + ETag/If-Match + 412)
-- PATCH metadata is last-write-wins — intentional
-- Concurrent publish is last-write-wins — intentional
-- `sort_order` (not `order`)
-- Series via `parentId`, depth unlimited, cycle detection in use case
-- `?parentId=root` for top-level entries
-- Pagination on public entries: default 20, max 200
-- Two-step ?type query: PG → batch Mongo
-- Unpublish deletes `*_published` document
-- Delete cascades; entry with children returns 409
-- Cache with 1h TTL + evict on publish/unpublish/delete
-- Rate limiting on both `/public/**` and `/cms/**`
+- PATCH metadata last-write-wins
+- Concurrent publish last-write-wins
+- `plan_id UUID NULL` on users
+- Future tables created (site_collaborators, media_assets, site_domains, site_webhooks, plans)
+- contentSchema as breaking change warning
+- 1MB content cap
+- Cache with TTL + evict on all state changes
+- Rate limiting on both /public and /cms
 
 ### Avoid
-- `status` field in PG — redundant with Mongo document existence
-- `VIEWER` role until collaboration exists
-- `ARCHIVED` status until there is a defined flow
-- Typed content classes — `Map<String, Object>` only
-- Mixing draft and published in the same document
+- MongoDB — removed
+- status column in sites or site_entries
+- Typed content classes
+- parent_id adjacency list — use ltree path
+- Cycle detection code — ltree handles it
 - Slug as identifier
-- Filtering by `type` directly in MongoDB — `type` lives in PG
-- `PUT .../draft` without `If-Match` — always required
-- Content over 1MB
+- PUT .../draft without If-Match
 
-### Pending decisions
-- **OAuth2 social login**: schema ready. Resolve email-merge edge case first.
-- **Pricing / plan tiers**: `user_roles` ready. Add `plans` table when needed.
-- **JWT refresh / revocation**: not defined yet.
+### Deferred until real users/clients
+- content_types + content_fields (schema builder)
+- RLS
+- i18n
+- Preview tokens
+- Webhooks logic
+- Custom domains logic
+- Media upload logic
+- site_collaborators logic
+- JWT refresh/revocation strategy
+- OAuth2 social login
 
 ---
 
-## 12. MVP
+## 11. MVP
 
-### Persistence
-- PostgreSQL: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`, `sites`, `site_entries`
-- MongoDB: `site_drafts`, `site_published`, `site_entry_drafts`, `site_entry_published`
+### Flyway migrations
+```
+V1__create_users_schema.sql
+V2__create_sites_schema.sql
+V3__create_site_entries_schema.sql        ← includes ltree extension
+V4__create_draft_published_schema.sql
+V5__create_future_tables.sql              ← site_collaborators, media_assets, site_domains, site_webhooks, plans
+```
 
 ### Minimum endpoints
 ```
@@ -661,25 +757,27 @@ GET  /public/sites/{id}/entries/{entryId}
 
 ---
 
-## 13. Confirmed architecture
+## 12. Confirmed architecture
 
-1. **PostgreSQL** — ownership, relationships, navigation metadata. Never content or state.
-2. **MongoDB** — all content + publication state via document existence
+1. **PostgreSQL only** — identity, metadata, content (JSONB), publication state (row existence)
+2. **ltree** for entry hierarchy — acyclic, depth-unlimited, efficient queries
 3. **Hexagonal architecture** with ports for each use case
-4. **Generic content model** — `Map<String, Object>`, frontend defines structure
+4. **Generic content model** — JSONB / `Map<String, Object>`, frontend defines structure
 5. **Multi-user headless CMS** — API serves JSON, each user integrates their own frontend
-6. **Single API** — `/cms`, `/public`, `/auth`; `/admin` reserved for system ops
+6. **Single API** — `/cms`, `/public`, `/auth`; `/admin` reserved
 
 ---
 
-## 14. Suggested next steps
+## 13. Suggested next steps
 
-1. Rewrite `V1__create_users_table.sql` — full normalized user schema
+1. `V1__create_users_schema.sql` — full normalized user schema with `plan_id NULL`
 2. Update `UserEntity` — remove `UserDetails` implementation
-3. `V2__create_sites_table.sql` — no `status`, with `content_schema`
-4. `V3__create_site_entries_table.sql` — no `status`, `sort_order`, indexes
-5. MongoDB documents: `SiteDraftDocument` (with `version`), `SitePublishedDocument`, `SiteEntryDraftDocument` (with `version`), `SiteEntryPublishedDocument`
-6. Domain models: `Site`, `SiteEntry`
-7. Output ports and adapters
-8. Use cases — cycle detection in `UpdateEntryUseCase`, cascade in `DeleteSiteUseCase`, batch Mongo query in listing
-9. Controllers: `AuthController`, `CmsSiteController`, `CmsEntryController`, `PublicSiteController`
+3. `V2__create_sites_schema.sql`
+4. `V3__create_site_entries_schema.sql` — ltree extension + indexes
+5. `V4__create_draft_published_schema.sql`
+6. `V5__create_future_tables.sql`
+7. JPA entities for all tables
+8. Domain models: `Site`, `SiteEntry`
+9. Output ports and adapters
+10. Use cases
+11. Controllers: `AuthController`, `CmsSiteController`, `CmsEntryController`, `PublicSiteController`

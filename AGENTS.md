@@ -10,6 +10,8 @@ The core content unit is a **site** — a generic, publishable content unit. A s
 
 **Core purpose:** allow any registered user to manage structured content through a UI, with draft/publish workflow, and expose the published version publicly via a read-only endpoint.
 
+**Strategic positioning:** designed for multi-tenant SaaS (Product B), built for single user first (Product A). Architecture decisions are made for B; features are built for A.
+
 Currently in early scaffolding phase: security plumbing and persistence foundation exist; domain/application core, REST controllers, and tests are **not yet implemented**.
 
 Architecture design spec: [`docs/portfolio-cms-architecture.md`](docs/portfolio-cms-architecture.md)
@@ -35,12 +37,11 @@ No CI, no Makefile, no Docker Compose — Maven is the only task runner.
 
 ## Required services
 
-Both must be running before starting the app:
+Only PostgreSQL is required. MongoDB has been removed.
 
 | Service | Default |
 |---|---|
 | PostgreSQL | `localhost:5432` — database: `cms_db` |
-| MongoDB | `localhost:27017` — database: `cms_content` |
 
 ---
 
@@ -50,7 +51,6 @@ Both must be running before starting the app:
 |---|---|---|
 | `DB_USERNAME` | `postgres` | PostgreSQL user |
 | `DB_PASSWORD` | `postgres` | PostgreSQL password |
-| `MONGO_URI` | `mongodb://localhost:27017/cms_content` | Full connection URI |
 | `JWT_SECRET` | insecure default in yml | Min 32 chars for HMAC-SHA256 |
 
 ---
@@ -79,34 +79,38 @@ src/main/java/com/cms/
 - **`domain/` and `application/` packages do not exist yet.**
 - **No REST controllers exist yet.**
 - **`src/test/` does not exist yet.**
+- **MongoDB dependency exists in pom.xml — to be removed.**
 
-### Planned next (from architecture doc, section 14)
+### Planned next (from architecture doc, section 13)
 In this order:
-1. Rewrite `V1__create_users_table.sql` as normalized user schema: `users`, `roles`, `user_roles`, `user_credentials`, `user_oauth_providers`, `user_profiles`
-2. Update `UserEntity` — remove `UserDetails` implementation from the JPA entity
-3. JPA entity `SiteEntity` + Flyway migration `V2__create_sites_table.sql`
-4. JPA entity `SiteEntryEntity` + Flyway migration `V3__create_site_entries_table.sql`
-5. MongoDB documents: `SiteDraftDocument`, `SitePublishedDocument`, `SiteEntryDraftDocument`, `SiteEntryPublishedDocument`
-6. Domain ports (`domain/port/in/`, `domain/port/out/`)
-7. Use case implementations (`application/usecase/`)
-8. REST controllers: `AuthController`, `CmsSiteController`, `CmsEntryController`, `PublicSiteController`
+1. Remove MongoDB dependency from `pom.xml` and `application.yml`
+2. Rewrite `V1__create_users_schema.sql` — full normalized user schema with `plan_id NULL`
+3. Update `UserEntity` — remove `UserDetails` implementation from the JPA entity
+4. `V2__create_sites_schema.sql`
+5. `V3__create_site_entries_schema.sql` — ltree extension + indexes
+6. `V4__create_draft_published_schema.sql`
+7. `V5__create_future_tables.sql` — site_collaborators, media_assets, site_domains, site_webhooks, plans
+8. JPA entities for all tables
+9. Domain models: `Site`, `SiteEntry`
+10. Output ports and adapters
+11. Use cases
+12. Controllers: `AuthController`, `CmsSiteController`, `CmsEntryController`, `PublicSiteController`
 
 ---
 
 ## Persistence strategy
 
-**PostgreSQL** answers: *"what exists and who owns it?"*
-- Identity, ownership, relationships, navigation metadata (`type`, `sort_order`, `parent_id`)
-- **No `status` column** — publication state is determined by MongoDB document existence
-- `ddl-auto: validate` — Flyway manages schema
+**Single database: PostgreSQL only. MongoDB has been removed.**
 
-**MongoDB** answers: *"what content does it have and is it published?"*
-- `site_drafts` — always exists, `content: {}` on create, `version` field for optimistic locking
-- `site_published` — its existence means the site is published; deleted on unpublish
-- `site_entry_drafts` — always exists, `version` field
-- `site_entry_published` — its existence means the entry is published; deleted on unpublish
+| What | How | Where |
+|---|---|---|
+| Identity and ownership | Normalized relational tables | PostgreSQL |
+| Site/entry metadata | Relational rows | PostgreSQL |
+| Entry hierarchy | `ltree` extension, `path LTREE` column | PostgreSQL |
+| All content | `JSONB` column | PostgreSQL |
+| Publication state | Row existence in `site_published` / `site_entry_published` | PostgreSQL |
 
-**No field is duplicated between the two databases.** They are complementary, not redundant.
+**No status column on `sites` or `site_entries`.** Published = row exists in `*_published` table.
 
 Flyway migrations: `src/main/resources/db/migration/V{n}__{description}.sql`
 
@@ -124,25 +128,26 @@ Flyway migrations: `src/main/resources/db/migration/V{n}__{description}.sql`
 - `VIEWER` dropped until per-site collaboration exists
 
 ### Publication state
-- **No `status` field in PostgreSQL.** Published state = existence of `*_published` document in MongoDB
-- `site_published` exists → site is published. Does not exist → draft only
-- `site_entry_published` exists → entry is published. Does not exist → draft only
-- `GET /public/**` returns `404` when no published document exists
-- Unpublish **deletes** the `*_published` document
+- **No `status` column in PostgreSQL.**
+- `site_published` row exists → site is published. Does not exist → draft only
+- `site_entry_published` row exists → entry is published. Does not exist → draft only
+- `GET /public/**` returns `404` when no published row exists
+- Unpublish **deletes** the `*_published` row
+- Published state in CMS listing via LEFT JOIN — single query, not N+1
 
 ### Multi-user isolation
-- Each site has `ownerUserId`. Use cases must validate ownership — never rely on auth alone
+- Each site has `owner_user_id`. Use cases must validate ownership — never rely on auth alone
 - `GET /cms/sites` returns only the authenticated user's sites
-- Published state for listing: batch query `site_published` by `siteId` list — not N+1
 
 ### Draft/publish workflow
-- Every site and entry has one draft document, initialized with `content: {}`
+- Every site and entry has one draft row, initialized with `content: '{}'`
 - `GET .../draft` always returns `200` if the resource exists
 - Saving never auto-publishes — autoguardado is a frontend concern
-- `POST .../publish` copies draft content → published document (overwrite if exists)
+- `POST .../publish` upserts `*_published` row in a single transaction
+- All publish/unpublish/delete operations are transactional
 
 ### Optimistic locking on drafts
-- Draft documents have `version: Long`, incremented on every save
+- Draft rows have `version: Long`, incremented on every save
 - `GET .../draft` exposes `version` as `ETag` header
 - `PUT .../draft` **requires** `If-Match` header — returns `412` on mismatch
 - Frontend 412 handling: "Someone else saved changes — reload to continue"
@@ -150,26 +155,27 @@ Flyway migrations: `src/main/resources/db/migration/V{n}__{description}.sql`
 - PATCH metadata (`title`, `summary`, `contentSchema`) is last-write-wins — intentional
 
 ### Content rules
-- Content is always `Map<String, Object>` — backend never interprets structure
+- Content is always `JSONB` / `Map<String, Object>` — backend never interprets structure
 - `content` must be a JSON object (not null, not array)
-- **Maximum content size: 1MB** — validated in use case before writing to MongoDB
+- **Maximum content size: 1MB** — validated in use case before writing
 - No typed section DTOs — ever
 
-### Entry hierarchy (series)
-- Entries reference parent via `parentId` (self-reference in `site_entries`)
-- Depth unlimited — no level restriction
-- `?parentId=root` = entries where `parent_id IS NULL`
-- On every PATCH that sets `parentId`: walk ancestor chain, return `400` if cycle detected
-- `parentId` must reference an entry within the same site
+### Entry hierarchy (ltree)
+- `site_entries` has a `path LTREE` column — e.g. `root.seriesId.entryId`
+- Root entries: `nlevel(path) = 1`
+- `?parentId=root` = top-level entries
+- Cycles are **impossible by construction** — ltree is acyclic
+- Moving an entry updates path for entry and all descendants in one transaction
+- No cycle detection code needed
 
 ### Delete behavior
-- `DELETE /cms/sites/{id}` — cascades: all `site_entries` + all 4 MongoDB document types
-- `DELETE .../entries/{entryId}` with no children — deletes row + draft doc + published doc
+- `DELETE /cms/sites/{id}` — cascades in transaction: all entries, all draft/published rows
+- `DELETE .../entries/{entryId}` with no children — deletes row + draft + published
 - `DELETE .../entries/{entryId}` with children — returns `409`
 
-### ?type filter — two-step query
-- `GET /public/sites/{id}/entries?type=post` queries PostgreSQL index `(site_id, type)` → batch fetches MongoDB `site_entry_published` by `entryId` list
-- Never filter by `type` directly in MongoDB — `type` lives in PostgreSQL
+### ?type filter
+- `GET /public/sites/{id}/entries?type=post` uses index `(site_id, type)` on `site_entries`
+- JOIN with `site_entry_published` in same query — no secondary fetch needed (single DB)
 
 ### contentSchema
 - `VARCHAR(100) NULL` on `sites`. Written by CMS UI (e.g. `"portfolio-v1"`)
@@ -182,7 +188,7 @@ Flyway migrations: `src/main/resources/db/migration/V{n}__{description}.sql`
 - `/cms/sites/**` — JWT required (user's own resources)
 - `/auth/**` — no auth
 - `/admin/**` — reserved for future system-level operations
-- DTOs separate for public vs cms responses — never expose persistence documents directly
+- DTOs separate for public vs cms responses — never expose entity objects directly
 
 ### Public endpoint protection
 Two mitigations required before production:
@@ -192,12 +198,20 @@ Two mitigations required before production:
 ### Pagination
 - Public entries: `?limit=20` default, max `200`
 
+### Future tables — created in migrations, no logic yet
+- `site_collaborators` — per-site roles
+- `media_assets` — file uploads
+- `site_domains` — custom domains
+- `site_webhooks` — publish/unpublish hooks
+- `plans` — pricing tiers
+- `users.plan_id UUID NULL` — monetization hook
+
 ---
 
 ## Test profile
 
 `application-test.yml` activates with `spring.profiles.active=test`:
-- Uses `cms_db_test` (PostgreSQL) and `cms_content_test` (MongoDB)
+- Uses `cms_db_test` (PostgreSQL)
 - `ddl-auto: create-drop` — Hibernate manages schema (no Flyway in tests)
 - Flyway **disabled** in test profile
 
