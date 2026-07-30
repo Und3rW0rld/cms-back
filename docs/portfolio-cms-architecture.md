@@ -613,3 +613,223 @@ These are not deferred because they are unimportant — they are deferred becaus
 | OAuth2 social login | Resolve email-merge edge case first |
 | JWT refresh/revocation | Define strategy (blocklist vs short-lived tokens) |
 | `plans` + `plan_id` FK | Monetization launch |
+
+---
+
+## 15. Mock data — full picture
+
+A complete snapshot of every table for one user with one portfolio site containing a series with two posts.
+
+### PostgreSQL
+
+**`users`**
+```
+id | email                      | name              | enabled | plan_id | created_at
+1  | santiago@example.com       | Santiago Acevedo  | true    | NULL    | 2026-07-01 09:00:00
+```
+
+**`roles`**
+```
+id | name
+1  | ADMIN
+2  | EDITOR
+```
+
+**`user_roles`**
+```
+user_id | role_id
+1       | 2        -- Santiago is EDITOR
+```
+
+**`user_credentials`**
+```
+user_id | password_hash                                             | created_at          | updated_at
+1       | $2a$12$Kx8Qz1...                                         | 2026-07-01 09:00:00 | 2026-07-01 09:00:00
+```
+
+**`user_profiles`**
+```
+user_id | last_name | phone | bio                              | avatar_url                          | website                    | metadata
+1       | Acevedo   | NULL  | Backend developer, Java & Spring | https://cdn.example.com/avatar.jpg  | https://santiago.dev       | {"github":"https://github.com/santiago","linkedin":"https://linkedin.com/in/santiago","timezone":"America/Bogota"}
+```
+
+---
+
+**`sites`**
+```
+id                                   | owner_user_id | title             | summary                    | content_schema  | created_at          | updated_at
+b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a | 1             | Santiago Acevedo  | Backend Developer Portfolio | portfolio-v1   | 2026-07-01 10:00:00 | 2026-07-15 14:00:00
+```
+
+---
+
+**`site_entries`** — one series + two posts
+```
+id                                   | site_id      | path                                                                                           | type   | sort_order | created_at
+c1111111-0000-0000-0000-000000000001 | b7fd3b44-... | root.c1111111_0000_0000_0000_000000000001                                                      | series | 1          | 2026-07-02
+c2222222-0000-0000-0000-000000000002 | b7fd3b44-... | root.c1111111_0000_0000_0000_000000000001.c2222222_0000_0000_0000_000000000002                 | post   | 1          | 2026-07-03
+c3333333-0000-0000-0000-000000000003 | b7fd3b44-... | root.c1111111_0000_0000_0000_000000000001.c2222222_0000_0000_0000_000000000002.c3333333_...    | post   | 2          | 2026-07-10
+```
+
+Note: path segments are UUIDs with `-` replaced by `_`.
+
+---
+
+**`site_drafts`**
+```
+site_id      | version | content (JSONB)                                                    | updated_at
+b7fd3b44-... | 5       | {"seo":{...},"hero":{...},"skills":[...],"jobs":[...],"projects":[...]} | 2026-07-15 14:00:00
+```
+
+**`site_published`**
+```
+site_id      | content (JSONB)                                                    | published_at
+b7fd3b44-... | {"seo":{...},"hero":{...},"skills":[...],"jobs":[...],"projects":[...]} | 2026-07-15 14:05:00
+```
+
+---
+
+**`site_entry_drafts`**
+```
+entry_id     | site_id      | version | content (JSONB)                                                         | updated_at
+c1111111-... | b7fd3b44-... | 2       | {"title":"Hexagonal Architecture Series","description":"A 3-part..."}   | 2026-07-02 11:00:00
+c2222222-... | b7fd3b44-... | 3       | {"title":"Part 1: Domain Layer","date":"2026-07-03","body":"# Domain..."} | 2026-07-10 09:00:00
+c3333333-... | b7fd3b44-... | 1       | {"title":"Part 2: Application Layer","date":"2026-07-10","body":"..."}   | 2026-07-10 10:00:00
+```
+
+**`site_entry_published`**
+```
+entry_id     | site_id      | content (JSONB)                                                         | published_at
+c1111111-... | b7fd3b44-... | {"title":"Hexagonal Architecture Series","description":"A 3-part..."}   | 2026-07-02 12:00:00
+c2222222-... | b7fd3b44-... | {"title":"Part 1: Domain Layer","date":"2026-07-03","body":"# Domain..."} | 2026-07-10 09:30:00
+-- c3333333 not published yet — no row exists
+```
+
+---
+
+### JSONB content expanded
+
+**`site_published.content`** — full portfolio
+```json
+{
+  "seo": {
+    "title": "Santiago Acevedo | Backend Developer",
+    "description": "Java, Spring Boot, hexagonal architecture",
+    "ogImage": "https://cdn.example.com/og.png"
+  },
+  "hero": {
+    "greeting": "Hi, I'm",
+    "name": "Santiago Acevedo",
+    "tagline": "Backend developer building APIs and scalable systems.",
+    "ctaLabel": "View projects",
+    "ctaUrl": "/projects"
+  },
+  "skills": [
+    { "name": "Java",        "slug": "openjdk",     "category": "BACKEND" },
+    { "name": "Spring Boot", "slug": "spring",      "category": "BACKEND" },
+    { "name": "PostgreSQL",  "slug": "postgresql",  "category": "BACKEND" },
+    { "name": "Docker",      "slug": "docker",      "category": "CLOUD_DEVOPS" }
+  ],
+  "jobs": [
+    {
+      "company":    "Acme Corp",
+      "role":       "Backend Developer",
+      "period":     "2023 — Present",
+      "location":   "Remote",
+      "highlights": [
+        "Built resilient REST APIs serving 50k req/day",
+        "Reduced average response time by 40% via query optimization",
+        "Led migration from monolith to hexagonal architecture"
+      ],
+      "tech": ["Java", "Spring Boot", "PostgreSQL", "Docker"]
+    }
+  ],
+  "projects": [
+    {
+      "name":        "Event Stream Engine",
+      "description": "Domain event processing engine with guaranteed delivery.",
+      "tech":        ["Java", "Kafka", "Docker"],
+      "github":      "https://github.com/santiago/event-stream-engine",
+      "live":        null
+    }
+  ]
+}
+```
+
+**`site_entry_published.content`** — series index (c1111111)
+```json
+{
+  "title":       "Hexagonal Architecture Series",
+  "description": "A 3-part series on building clean Java backends.",
+  "banner":      "https://cdn.example.com/series-banner.png",
+  "tags":        ["architecture", "java", "spring"]
+}
+```
+
+**`site_entry_published.content`** — part 1 (c2222222)
+```json
+{
+  "title":    "Part 1: The Domain Layer",
+  "date":     "2026-07-03",
+  "body":     "# The Domain Layer\n\nThe domain layer contains your business logic...",
+  "excerpt":  "What belongs in domain, what doesn't, and why it matters.",
+  "tags":     ["architecture", "java", "hexagonal"],
+  "readTime": "6 min read",
+  "banner":   "https://cdn.example.com/part1-banner.png"
+}
+```
+
+**`site_entry_drafts.content`** — part 2, not yet published (c3333333)
+```json
+{
+  "title":    "Part 2: The Application Layer",
+  "date":     "2026-07-10",
+  "body":     "# The Application Layer\n\nThis is still a draft...",
+  "excerpt":  "Use cases, orchestration, and keeping the domain clean.",
+  "tags":     ["architecture", "java", "hexagonal"],
+  "readTime": "7 min read"
+}
+```
+
+---
+
+### What the public API returns
+
+**`GET /public/sites/b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a`**
+```json
+{
+  "id":            "b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a",
+  "title":         "Santiago Acevedo",
+  "summary":       "Backend Developer Portfolio",
+  "contentSchema": "portfolio-v1",
+  "content": {
+    "seo":      { "title": "Santiago Acevedo | Backend Developer", "..." : "..." },
+    "hero":     { "greeting": "Hi, I'm", "name": "Santiago Acevedo", "..." : "..." },
+    "skills":   [ "..." ],
+    "jobs":     [ "..." ],
+    "projects": [ "..." ]
+  },
+  "publishedAt": "2026-07-15T14:05:00Z"
+}
+```
+
+**`GET /public/sites/b7fd3b44-.../entries?parentId=c1111111-...`**
+```json
+[
+  {
+    "id":   "c2222222-0000-0000-0000-000000000002",
+    "type": "post",
+    "sortOrder": 1,
+    "content": {
+      "title":    "Part 1: The Domain Layer",
+      "date":     "2026-07-03",
+      "excerpt":  "What belongs in domain, what doesn't, and why it matters.",
+      "tags":     ["architecture", "java", "hexagonal"],
+      "readTime": "6 min read",
+      "banner":   "https://cdn.example.com/part1-banner.png"
+    },
+    "publishedAt": "2026-07-10T09:30:00Z"
+  }
+  -- c3333333 not returned — no site_entry_published row exists
+]
+```
