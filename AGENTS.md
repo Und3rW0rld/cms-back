@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-**Headless CMS API** — multi-user, Java 21 + Spring Boot 3.5, Hexagonal (Ports & Adapters) Architecture.
+**Headless CMS API** — multi-user, Java 26 + Spring Boot 3.5, Hexagonal (Ports & Adapters) Architecture.
 
 Users manage content through a CMS UI; their own frontends (portfolio, blog, etc.) consume the public API. The CMS serves JSON only — no HTML rendering.
 

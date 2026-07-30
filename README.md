@@ -9,7 +9,7 @@ Users manage content through a CMS UI; their own frontends (portfolio, blog, pro
 | Layer | Technology |
 |---|---|
 | Framework | Spring Boot 3.5.0 |
-| Language | Java 21 |
+| Language | Java 26 |
 | Database | PostgreSQL 16 + Spring Data JPA |
 | Migrations | Flyway |
 | Hierarchy | PostgreSQL `ltree` extension |
@@ -56,7 +56,7 @@ Base path: `/api` — e.g. `http://localhost:8080/api/cms/sites`
 
 ### Prerequisites
 
-- Java 21+
+- Java 26+
 - Maven 3.9+
 - PostgreSQL 16 running on `localhost:5432` with database `cms_db`
 
