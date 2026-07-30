@@ -28,7 +28,7 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
         String correlationId = Optional.ofNullable(request.getHeader(CORRELATION_ID_HEADER))
-                .filter(id -> !id.isBlank())
+                .filter(this::isValidUuid)
                 .orElseGet(() -> UUID.randomUUID().toString());
 
         MDC.put(CORRELATION_ID_MDC_KEY, correlationId);
@@ -38,6 +38,15 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
         } finally {
             MDC.remove(CORRELATION_ID_MDC_KEY);
+        }
+    }
+
+    private boolean isValidUuid(String value) {
+        try {
+            UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 }

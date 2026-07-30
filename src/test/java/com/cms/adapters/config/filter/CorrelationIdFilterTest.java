@@ -2,8 +2,6 @@ package com.cms.adapters.config.filter;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.MDC;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -11,7 +9,6 @@ import org.springframework.mock.web.MockHttpServletResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@ExtendWith(MockitoExtension.class)
 class CorrelationIdFilterTest {
 
     private final CorrelationIdFilter filter = new CorrelationIdFilter();
@@ -25,17 +22,18 @@ class CorrelationIdFilterTest {
     }
 
     @Test
-    void shouldUseCorrelationIdFromRequestHeader() throws Exception {
-        request.addHeader(CorrelationIdFilter.CORRELATION_ID_HEADER, "existing-id");
+    void shouldUseValidUuidFromRequestHeader() throws Exception {
+        String validUuid = "550e8400-e29b-41d4-a716-446655440000";
+        request.addHeader(CorrelationIdFilter.CORRELATION_ID_HEADER, validUuid);
 
         filter.doFilterInternal(request, response, chain);
 
         assertThat(response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER))
-                .isEqualTo("existing-id");
+                .isEqualTo(validUuid);
     }
 
     @Test
-    void shouldGenerateCorrelationIdWhenHeaderAbsent() throws Exception {
+    void shouldGenerateUuidWhenHeaderAbsent() throws Exception {
         filter.doFilterInternal(request, response, chain);
 
         assertThat(response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER))
@@ -43,7 +41,7 @@ class CorrelationIdFilterTest {
     }
 
     @Test
-    void shouldGenerateCorrelationIdWhenHeaderIsBlank() throws Exception {
+    void shouldGenerateUuidWhenHeaderIsBlank() throws Exception {
         request.addHeader(CorrelationIdFilter.CORRELATION_ID_HEADER, "   ");
 
         filter.doFilterInternal(request, response, chain);
@@ -54,7 +52,19 @@ class CorrelationIdFilterTest {
     }
 
     @Test
-    void shouldGenerateDifferentIdsForEachRequest() throws Exception {
+    void shouldGenerateUuidWhenHeaderIsNotValidUuid() throws Exception {
+        request.addHeader(CorrelationIdFilter.CORRELATION_ID_HEADER, "not-a-uuid/../../../etc");
+
+        filter.doFilterInternal(request, response, chain);
+
+        String result = response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER);
+        assertThat(result)
+                .isNotEqualTo("not-a-uuid/../../../etc")
+                .isNotBlank();
+    }
+
+    @Test
+    void shouldGenerateDifferentUuidsForEachRequest() throws Exception {
         filter.doFilterInternal(request, response, chain);
         String firstId = response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER);
 

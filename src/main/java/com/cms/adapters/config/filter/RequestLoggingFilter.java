@@ -23,17 +23,19 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
-        long start = System.currentTimeMillis();
+        long startNanos = System.nanoTime();
+        int status = 500;
 
         try {
             filterChain.doFilter(request, response);
+            status = response.getStatus();
         } finally {
-            long duration = System.currentTimeMillis() - start;
+            long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
             log.info("{} {} {} {}ms",
                     request.getMethod(),
                     request.getRequestURI(),
-                    response.getStatus(),
-                    duration);
+                    status,
+                    durationMs);
         }
     }
 }

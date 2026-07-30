@@ -3,15 +3,12 @@ package com.cms.adapters.config.filter;
 import jakarta.servlet.ServletException;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@ExtendWith(MockitoExtension.class)
 class RequestLoggingFilterTest {
 
     private final RequestLoggingFilter filter = new RequestLoggingFilter();
@@ -39,7 +36,7 @@ class RequestLoggingFilterTest {
     }
 
     @Test
-    void shouldCompleteEvenWhenFilterChainThrows() throws Exception {
+    void shouldLog500WhenFilterChainThrows() throws Exception {
         MockFilterChain throwingChain = new MockFilterChain() {
             @Override
             public void doFilter(jakarta.servlet.ServletRequest req, jakarta.servlet.ServletResponse res)
