@@ -43,12 +43,28 @@ src/main/java/com/cms/
 ## Commands
 
 ```bash
-mvn spring-boot:run
+mvn spring-boot:run        # runs with dev profile (application-dev.properties)
+mvn test                   # always runs with test profile (forced by Surefire)
 mvn package -DskipTests
-mvn test
 ```
 
 No CI, no Makefile, no Docker Compose. Maven only.
+
+---
+
+## Spring profiles
+
+| Profile | When active | DB | Flyway | ddl-auto |
+|---|---|---|---|---|
+| `dev` | `mvn spring-boot:run` | `cms_db` | enabled | `validate` |
+| `test` | `mvn test` (always, forced by Surefire) | `cms_db_test` | disabled | `create-drop` |
+| `prod` | `SPRING_PROFILES_ACTIVE=prod` | `${DB_URL}` (no default) | enabled | `none` |
+
+**`mvn test` always uses the `test` profile** — this is enforced by `maven-surefire-plugin` in `pom.xml`, not by the developer. No manual profile switching needed.
+
+Test classes that use `@SpringBootTest` should also annotate with `@ActiveProfiles("test")` as a safety net.
+
+In `prod`: no defaults for DB credentials — missing env vars cause startup failure intentionally. Swagger UI is disabled.
 
 ---
 
@@ -58,7 +74,11 @@ PostgreSQL only. MongoDB has been removed.
 
 | Service | Default |
 |---|---|
-| PostgreSQL | `localhost:5432` db: `cms_db` |
+| PostgreSQL | `localhost:5432` |
+
+Two databases needed locally:
+- `cms_db` — dev and prod
+- `cms_db_test` — tests (created separately, never touched by dev runs)
 
 ---
 
@@ -66,9 +86,10 @@ PostgreSQL only. MongoDB has been removed.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `DB_USERNAME` | `postgres` | |
-| `DB_PASSWORD` | `postgres` | |
-| `JWT_SECRET` | insecure default | Min 32 chars |
+| `DB_USERNAME` | `postgres` (dev/test only) | Required with no default in prod |
+| `DB_PASSWORD` | `postgres` (dev/test only) | Required with no default in prod |
+| `DB_URL` | — | Required in prod — full JDBC URL |
+| `JWT_SECRET` | insecure default (dev/test only) | Required with no default in prod, min 32 chars |
 
 ---
 
@@ -173,12 +194,53 @@ Bucket4j: `/public/**` ~20 req/s per IP; `/cms/**` ~10 req/s per authenticated u
 
 ---
 
+## Testing conventions
+
+### Four layers
+
+| Layer | Annotation | DB | Use for |
+|---|---|---|---|
+| Unit | `@ExtendWith(MockitoExtension.class)` | None | Use case logic, domain rules |
+| Integration | `@SpringBootTest` + `@Testcontainers` | PostgreSQL container | Repository queries, cascade, ltree, JSONB |
+| Web slice | `@WebMvcTest` | None (mocked) | HTTP contracts, status codes, error envelope |
+| JPA slice | `@DataJpaTest` + `@Testcontainers` | PostgreSQL container | Custom queries, index usage |
+
+### Rules
+- All test classes annotate with `@ActiveProfiles("test")` — always, even if Surefire already forces it
+- `@Transactional` on integration test classes — automatic rollback, no manual cleanup
+- `@DataJpaTest` must use `@AutoConfigureTestDatabase(replace = NONE)` — prevents H2 replacement, required for ltree queries
+- Use Testcontainers for any test that hits the DB — do not depend on `cms_db_test` being pre-created (breaks CI)
+- Unit tests have no profile dependency — keep them pure Java
+
+### Testcontainers base pattern
+```java
+@Testcontainers
+class MyIntegrationTest {
+
+    @Container
+    static PostgreSQLContainer<?> postgres =
+        new PostgreSQLContainer<>("postgres:16");
+
+    @DynamicPropertySource
+    static void configureDataSource(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+    }
+}
+```
+
+Testcontainers requires Docker running. Dependencies added in M6 milestone.
+
+---
+
 ## Test profile
 
-`spring.profiles.active=test` activates `application-test.yml`:
-- DB: `cms_db_test`
+`spring.profiles.active=test` activates `application-test.properties`:
+- DB: `cms_db_test` (fallback for slice tests without Testcontainers)
 - `ddl-auto: create-drop` — Hibernate manages schema
 - Flyway disabled
+- Logging: WARN — minimal output
 
 ---
 

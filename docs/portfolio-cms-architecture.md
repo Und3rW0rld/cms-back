@@ -833,3 +833,161 @@ c2222222-... | b7fd3b44-... | {"title":"Part 1: Domain Layer","date":"2026-07-03
   -- c3333333 not returned — no site_entry_published row exists
 ]
 ```
+
+---
+
+## 16. Testing strategy
+
+### Philosophy
+
+Four layers, each with a distinct purpose. Never use a heavier tool than needed.
+
+| Layer | Tool | Spring context | DB | Speed |
+|---|---|---|---|---|
+| Unit | JUnit 5 + Mockito | None | None | Fast (ms) |
+| Integration | `@SpringBootTest` + Testcontainers | Full | Real PostgreSQL container | Medium (s) |
+| Web slice | `@WebMvcTest` + MockMvc | Web layer only | None (mocked) | Fast |
+| JPA slice | `@DataJpaTest` + Testcontainers | JPA layer only | Real PostgreSQL container | Medium |
+
+---
+
+### Unit tests
+
+Test domain logic and use cases in isolation. No Spring, no DB, no I/O.
+
+```java
+@ExtendWith(MockitoExtension.class)
+class PublishSiteServiceTest {
+
+    @Mock SiteRepository siteRepo;
+    @Mock SiteDraftRepository draftRepo;
+    @Mock SitePublishedRepository publishedRepo;
+
+    @InjectMocks PublishSiteService service;
+
+    @Test
+    void shouldPublishDraft() { ... }
+
+    @Test
+    void shouldThrowWhenSiteNotFound() { ... }
+}
+```
+
+These cover: use case logic, domain rules, error conditions, ownership validation.
+
+---
+
+### Integration tests — Testcontainers
+
+Full Spring context + real PostgreSQL in a Docker container. Works identically locally and in CI — no external DB required.
+
+```java
+@SpringBootTest
+@ActiveProfiles("test")
+@Testcontainers
+@Transactional  // automatic rollback after each test — DB is clean for every @Test
+class SiteRepositoryIntegrationTest {
+
+    @Container
+    static PostgreSQLContainer<?> postgres =
+        new PostgreSQLContainer<>("postgres:16")
+            .withDatabaseName("cms_test")
+            .withUsername("test")
+            .withPassword("test");
+
+    @DynamicPropertySource
+    static void configureDataSource(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+    }
+}
+```
+
+`@Transactional` on the test class rolls back every `@Test` automatically — no manual data cleanup needed.
+
+These cover: repository queries, ltree path operations, JSONB CHECK constraints, cascade deletes, optimistic locking conflicts.
+
+---
+
+### Web slice tests
+
+Test controllers and HTTP contracts without loading the full context. Use MockMvc to assert status codes, response shapes, and error envelopes.
+
+```java
+@WebMvcTest(CmsSiteController.class)
+@ActiveProfiles("test")
+class CmsSiteControllerTest {
+
+    @Autowired MockMvc mockMvc;
+    @MockBean CreateSiteUseCase createSiteUseCase;
+
+    @Test
+    void shouldReturn201WhenSiteCreated() throws Exception {
+        mockMvc.perform(post("/cms/sites")
+                .header("Authorization", "Bearer " + validToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""{"title":"My Site"}"""))
+            .andExpect(status().isCreated());
+    }
+}
+```
+
+These cover: HTTP status codes, request validation (422), auth enforcement (401/403), error envelope shape, If-Match / 412 behavior.
+
+---
+
+### JPA slice tests
+
+Test repository queries and SQL in isolation without loading the web layer.
+
+```java
+@DataJpaTest
+@ActiveProfiles("test")
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Testcontainers
+class SiteEntryRepositoryTest {
+
+    @Container
+    static PostgreSQLContainer<?> postgres = ...;
+
+    @DynamicPropertySource
+    static void configureDataSource(...) { ... }
+
+    @Test
+    void shouldFindDirectChildrenByLtreePath() { ... }
+}
+```
+
+`@AutoConfigureTestDatabase(replace = NONE)` prevents Spring from replacing the datasource with an in-memory H2 — we want real PostgreSQL to test ltree queries.
+
+These cover: ltree path queries, custom `@Query` methods, index usage, JSONB constraints.
+
+---
+
+### Required dependencies (to add in M6)
+
+```xml
+<!-- Testcontainers -->
+<dependency>
+    <groupId>org.testcontainers</groupId>
+    <artifactId>junit-jupiter</artifactId>
+    <scope>test</scope>
+</dependency>
+<dependency>
+    <groupId>org.testcontainers</groupId>
+    <artifactId>postgresql</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+Testcontainers requires Docker running locally and in CI.
+
+---
+
+### Profile and DB conventions for tests
+
+- All test classes use `@ActiveProfiles("test")` as a safety net
+- `mvn test` always activates the `test` profile via `maven-surefire-plugin` — no manual switching needed
+- Integration tests use Testcontainers — they do not depend on `cms_db_test` being pre-created
+- `application-test.properties` keeps `ddl-auto: create-drop` as fallback for slice tests that don't use Testcontainers
