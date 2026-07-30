@@ -1,5 +1,6 @@
 package com.cms.adapters.config.filter;
 
+import com.cms.adapters.in.web.constant.ApiHeaders;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
@@ -24,41 +25,38 @@ class CorrelationIdFilterTest {
     @Test
     void shouldUseValidUuidFromRequestHeader() throws Exception {
         String validUuid = "550e8400-e29b-41d4-a716-446655440000";
-        request.addHeader(CorrelationIdFilter.CORRELATION_ID_HEADER, validUuid);
+        request.addHeader(ApiHeaders.CORRELATION_ID, validUuid);
 
         filter.doFilterInternal(request, response, chain);
 
-        assertThat(response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER))
-                .isEqualTo(validUuid);
+        assertThat(response.getHeader(ApiHeaders.CORRELATION_ID)).isEqualTo(validUuid);
     }
 
     @Test
     void shouldGenerateUuidWhenHeaderAbsent() throws Exception {
         filter.doFilterInternal(request, response, chain);
 
-        assertThat(response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER))
-                .isNotBlank();
+        assertThat(response.getHeader(ApiHeaders.CORRELATION_ID)).isNotBlank();
     }
 
     @Test
     void shouldGenerateUuidWhenHeaderIsBlank() throws Exception {
-        request.addHeader(CorrelationIdFilter.CORRELATION_ID_HEADER, "   ");
+        request.addHeader(ApiHeaders.CORRELATION_ID, "   ");
 
         filter.doFilterInternal(request, response, chain);
 
-        assertThat(response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER))
+        assertThat(response.getHeader(ApiHeaders.CORRELATION_ID))
                 .isNotBlank()
                 .isNotEqualTo("   ");
     }
 
     @Test
     void shouldGenerateUuidWhenHeaderIsNotValidUuid() throws Exception {
-        request.addHeader(CorrelationIdFilter.CORRELATION_ID_HEADER, "not-a-uuid/../../../etc");
+        request.addHeader(ApiHeaders.CORRELATION_ID, "not-a-uuid/../../../etc");
 
         filter.doFilterInternal(request, response, chain);
 
-        String result = response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER);
-        assertThat(result)
+        assertThat(response.getHeader(ApiHeaders.CORRELATION_ID))
                 .isNotEqualTo("not-a-uuid/../../../etc")
                 .isNotBlank();
     }
@@ -66,11 +64,11 @@ class CorrelationIdFilterTest {
     @Test
     void shouldGenerateDifferentUuidsForEachRequest() throws Exception {
         filter.doFilterInternal(request, response, chain);
-        String firstId = response.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER);
+        String firstId = response.getHeader(ApiHeaders.CORRELATION_ID);
 
         MockHttpServletResponse secondResponse = new MockHttpServletResponse();
         filter.doFilterInternal(new MockHttpServletRequest(), secondResponse, new MockFilterChain());
-        String secondId = secondResponse.getHeader(CorrelationIdFilter.CORRELATION_ID_HEADER);
+        String secondId = secondResponse.getHeader(ApiHeaders.CORRELATION_ID);
 
         assertThat(firstId).isNotEqualTo(secondId);
     }

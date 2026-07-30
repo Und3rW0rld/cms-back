@@ -1,5 +1,6 @@
 package com.cms.adapters.in.web.exception;
 
+import com.cms.adapters.config.filter.CorrelationIdFilter;
 import com.cms.domain.exception.ConflictException;
 import com.cms.domain.exception.NotFoundException;
 import com.cms.domain.exception.PreconditionFailedException;
@@ -18,8 +19,6 @@ import java.util.List;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
-
-    private static final String CORRELATION_ID_MDC_KEY = "correlationId";
 
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(NotFoundException ex) {
@@ -71,6 +70,6 @@ public class GlobalExceptionHandler {
     }
 
     private String correlationId() {
-        return MDC.get(CORRELATION_ID_MDC_KEY);
+        return MDC.get(CorrelationIdFilter.CORRELATION_ID_MDC_KEY);
     }
 }
