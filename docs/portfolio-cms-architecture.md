@@ -840,7 +840,7 @@ c2222222-... | b7fd3b44-... | {"title":"Part 1: Domain Layer","date":"2026-07-03
 
 ### Philosophy
 
-Three layers, each with a distinct purpose. Never use a heavier tool than needed.
+Four layers, each with a distinct purpose. Never use a heavier tool than needed.
 
 | Layer | Tool | Spring context | DB | Speed |
 |---|---|---|---|---|

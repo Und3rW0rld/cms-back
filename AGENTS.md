@@ -196,7 +196,7 @@ Bucket4j: `/public/**` ~20 req/s per IP; `/cms/**` ~10 req/s per authenticated u
 
 ## Testing conventions
 
-### Three layers
+### Four layers
 
 | Layer | Annotation | DB | Use for |
 |---|---|---|---|
