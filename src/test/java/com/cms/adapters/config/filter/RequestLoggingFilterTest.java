@@ -1,9 +1,6 @@
-package com.cms.adapters.in.web.filter;
+package com.cms.adapters.config.filter;
 
 import jakarta.servlet.ServletException;
-import jakarta.servlet.ServletRequest;
-import jakarta.servlet.ServletResponse;
-import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,7 +42,7 @@ class RequestLoggingFilterTest {
     void shouldCompleteEvenWhenFilterChainThrows() throws Exception {
         MockFilterChain throwingChain = new MockFilterChain() {
             @Override
-            public void doFilter(@NonNull ServletRequest req, @NonNull ServletResponse res)
+            public void doFilter(jakarta.servlet.ServletRequest req, jakarta.servlet.ServletResponse res)
                     throws ServletException {
                 throw new ServletException("simulated error");
             }

@@ -1,4 +1,4 @@
-package com.cms.adapters.in.web.filter;
+package com.cms.adapters.config.filter;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;

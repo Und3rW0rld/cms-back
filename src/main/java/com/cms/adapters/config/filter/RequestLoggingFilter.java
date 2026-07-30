@@ -1,25 +1,21 @@
-package com.cms.adapters.in.web.filter;
+package com.cms.adapters.config.filter;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.MDC;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.annotation.Order;
 import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.Optional;
-import java.util.UUID;
 
+@Slf4j
 @Component
-@Order(1)
-public class CorrelationIdFilter extends OncePerRequestFilter {
-
-    static final String CORRELATION_ID_HEADER = "X-Correlation-Id";
-    static final String CORRELATION_ID_MDC_KEY = "correlationId";
+@Order(2)
+public class RequestLoggingFilter extends OncePerRequestFilter {
 
     @Override
     protected void doFilterInternal(
@@ -27,17 +23,17 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
-        String correlationId = Optional.ofNullable(request.getHeader(CORRELATION_ID_HEADER))
-                .filter(id -> !id.isBlank())
-                .orElseGet(() -> UUID.randomUUID().toString());
-
-        MDC.put(CORRELATION_ID_MDC_KEY, correlationId);
-        response.setHeader(CORRELATION_ID_HEADER, correlationId);
+        long start = System.currentTimeMillis();
 
         try {
             filterChain.doFilter(request, response);
         } finally {
-            MDC.remove(CORRELATION_ID_MDC_KEY);
+            long duration = System.currentTimeMillis() - start;
+            log.info("{} {} {} {}ms",
+                    request.getMethod(),
+                    request.getRequestURI(),
+                    response.getStatus(),
+                    duration);
         }
     }
 }
