@@ -101,6 +101,7 @@ For `cms_db_test` (integration tests): also needs a separate database in Neon or
 | `DB_USERNAME` | dev, prod | |
 | `DB_PASSWORD` | dev, prod | |
 | `JWT_SECRET` | prod | Min 32 chars. Dev has insecure default in `application-dev.properties` |
+| `ALLOWED_ORIGINS` | prod | Comma-separated list of allowed CORS origins (e.g. `https://app.example.com`) |
 
 ---
 
