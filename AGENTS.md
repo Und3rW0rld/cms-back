@@ -95,8 +95,6 @@ For `cms_db_test` (integration tests): also needs a separate database in Neon or
 
 ## Environment variables
 
-## Environment variables
-
 | Variable | Required in | Notes |
 |---|---|---|
 | `DB_URL` | dev, prod | Full JDBC URL including `?sslmode=require` for Neon |
