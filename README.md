@@ -1,6 +1,6 @@
 # cms-back
 
-Multi-user headless CMS API — Java 21, Spring Boot 3.5, Hexagonal Architecture.
+Multi-user headless CMS API — Java 26, Spring Boot 3.5, Hexagonal Architecture.
 
 Users manage content through a CMS UI; their own frontends (portfolio, blog, product page, etc.) consume the public API. The API serves JSON only.
 
@@ -119,4 +119,5 @@ Publication state is determined by row existence in `site_published` / `site_ent
 ## Development notes
 
 - Working directory: `C:\Projects\cms-back` (not OneDrive — git repos should not live inside OneDrive)
+- Config: `application.properties` / `application-{profile}.properties` — no YAML
 - Test profile: `spring.profiles.active=test` — uses `cms_db_test`, Flyway disabled, `ddl-auto: create-drop`
