@@ -2,6 +2,7 @@ package com.cms.adapters.config;
 
 import com.cms.adapters.in.security.jwt.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -14,12 +15,14 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.annotation.web.configurers.HeadersConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 
 @Configuration
 @EnableWebSecurity
@@ -37,6 +40,9 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthFilter;
     private final UserDetailsService userDetailsService;
 
+    @Value("${security.hsts.enabled:false}")
+    private boolean hstsEnabled;
+
     @Bean
     @Order(1)
     public SecurityFilterChain actuatorSecurityFilterChain(HttpSecurity http) throws Exception {
@@ -44,6 +50,7 @@ public class SecurityConfig {
                 .securityMatcher("/actuator/**")
                 .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
                 .csrf(AbstractHttpConfigurer::disable)
+                .headers(this::configureSecurityHeaders)
                 .build();
     }
 
@@ -59,9 +66,26 @@ public class SecurityConfig {
                         .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
                         .anyRequest().authenticated()
                 )
+                .headers(this::configureSecurityHeaders)
                 .authenticationProvider(authenticationProvider())
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
+    }
+
+    private void configureSecurityHeaders(HeadersConfigurer<HttpSecurity> headers) {
+        headers.contentTypeOptions(Customizer.withDefaults());
+        headers.frameOptions(HeadersConfigurer.FrameOptionsConfig::deny);
+        headers.referrerPolicy(referrer ->
+                referrer.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER));
+        headers.cacheControl(Customizer.withDefaults());
+        if (hstsEnabled) {
+            headers.httpStrictTransportSecurity(hsts -> hsts
+                    .maxAgeInSeconds(31536000)
+                    .includeSubDomains(true)
+            );
+        } else {
+            headers.httpStrictTransportSecurity(hsts -> hsts.disable());
+        }
     }
 
     @Bean
