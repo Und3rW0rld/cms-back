@@ -8,7 +8,6 @@ import org.springframework.security.web.header.HeaderWriterFilter;
 import org.springframework.security.web.header.writers.CacheControlHeadersWriter;
 import org.springframework.security.web.header.writers.StaticHeadersWriter;
 import org.springframework.security.web.header.writers.XContentTypeOptionsHeaderWriter;
-import org.springframework.security.web.header.writers.XXssProtectionHeaderWriter;
 import org.springframework.security.web.header.writers.frameoptions.XFrameOptionsHeaderWriter;
 import org.springframework.security.web.header.writers.frameoptions.XFrameOptionsHeaderWriter.XFrameOptionsMode;
 
