@@ -12,3 +12,6 @@ target/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local environment secrets — never commit
+.env

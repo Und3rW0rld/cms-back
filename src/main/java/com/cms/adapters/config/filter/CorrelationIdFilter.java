@@ -1,5 +1,6 @@
 package com.cms.adapters.config.filter;
 
+import com.cms.adapters.in.web.constant.ApiHeaders;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -18,8 +19,7 @@ import java.util.UUID;
 @Order(1)
 public class CorrelationIdFilter extends OncePerRequestFilter {
 
-    static final String CORRELATION_ID_HEADER = "X-Correlation-Id";
-    static final String CORRELATION_ID_MDC_KEY = "correlationId";
+    public static final String CORRELATION_ID_MDC_KEY = "correlationId";
 
     @Override
     protected void doFilterInternal(
@@ -27,12 +27,12 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
-        String correlationId = Optional.ofNullable(request.getHeader(CORRELATION_ID_HEADER))
+        String correlationId = Optional.ofNullable(request.getHeader(ApiHeaders.CORRELATION_ID))
                 .filter(this::isValidUuid)
                 .orElseGet(() -> UUID.randomUUID().toString());
 
         MDC.put(CORRELATION_ID_MDC_KEY, correlationId);
-        response.setHeader(CORRELATION_ID_HEADER, correlationId);
+        response.setHeader(ApiHeaders.CORRELATION_ID, correlationId);
 
         try {
             filterChain.doFilter(request, response);

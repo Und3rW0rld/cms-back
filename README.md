@@ -8,7 +8,7 @@ Users manage content through a CMS UI; their own frontends (portfolio, blog, pro
 
 | Layer | Technology |
 |---|---|
-| Framework | Spring Boot 3.5.0 |
+| Framework | Spring Boot 4.0.0 |
 | Language | Java 26 |
 | Database | PostgreSQL 16 + Spring Data JPA |
 | Migrations | Flyway |
@@ -58,19 +58,29 @@ Base path: `/api` — e.g. `http://localhost:8080/api/cms/sites`
 
 - Java 26+
 - Maven 3.9+
-- PostgreSQL 16 running on `localhost:5432` with database `cms_db`
+- PostgreSQL via [Neon](https://neon.tech) (free tier) or any PostgreSQL 16+ instance
 
 ### Environment variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `DB_USERNAME` | `postgres` | PostgreSQL username |
-| `DB_PASSWORD` | `postgres` | PostgreSQL password |
-| `JWT_SECRET` | *(insecure default)* | JWT signing secret — **min 32 chars in production** |
+Create a `.env` file at the project root (never committed):
+
+```
+DB_URL=jdbc:postgresql://<host>/neondb?sslmode=require
+DB_USERNAME=<username>
+DB_PASSWORD=<password>
+JWT_SECRET=<min-32-chars>
+```
 
 ### Run
 
-```bash
+Load the `.env` variables and start:
+
+```powershell
+# PowerShell
+Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -ne '' } | ForEach-Object {
+    $key, $value = $_ -split '=', 2
+    [System.Environment]::SetEnvironmentVariable($key, $value, 'Process')
+}
 mvn spring-boot:run
 ```
 

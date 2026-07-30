@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-**Headless CMS API** — multi-user, Java 26 + Spring Boot 3.5, Hexagonal (Ports & Adapters) Architecture.
+**Headless CMS API** — multi-user, Java 26 + Spring Boot 4.0, Hexagonal (Ports & Adapters) Architecture.
 
 Users manage content through a CMS UI; their own frontends (portfolio, blog, etc.) consume the public API. The CMS serves JSON only — no HTML rendering.
 
@@ -34,9 +34,8 @@ src/main/java/com/cms/
         └── repository/UserJpaRepository.java
 ```
 
-**Pending before first implementation:**
-- Remove MongoDB dependency from `pom.xml` and `application.yml`
-- Rewrite `UserEntity` — remove `UserDetails` implementation from the JPA entity
+**Pending before first feature implementation:**
+- Rewrite `UserEntity` — remove `UserDetails` implementation from the JPA entity (issue #10)
 
 ---
 
@@ -70,26 +69,38 @@ In `prod`: no defaults for DB credentials — missing env vars cause startup fai
 
 ## Required services
 
-PostgreSQL only. MongoDB has been removed.
+PostgreSQL via Neon (cloud, free tier). No local database required.
 
-| Service | Default |
-|---|---|
-| PostgreSQL | `localhost:5432` |
+Configure credentials in `.env` at the project root (never committed — in `.gitignore`):
 
-Two databases needed locally:
-- `cms_db` — dev and prod
-- `cms_db_test` — tests (created separately, never touched by dev runs)
+```
+DB_URL=jdbc:postgresql://<host>/neondb?sslmode=require
+DB_USERNAME=<username>
+DB_PASSWORD=<password>
+JWT_SECRET=<min-32-chars>
+```
+
+Load `.env` before running:
+```powershell
+Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -ne '' } | ForEach-Object {
+    $key, $value = $_ -split '=', 2
+    [System.Environment]::SetEnvironmentVariable($key, $value, 'Process')
+}
+mvn spring-boot:run
+```
+
+For `cms_db_test` (integration tests): also needs a separate database in Neon or local PostgreSQL.
 
 ---
 
 ## Environment variables
 
-| Variable | Default | Notes |
+| Variable | Required in | Notes |
 |---|---|---|
-| `DB_USERNAME` | `postgres` (dev/test only) | Required with no default in prod |
-| `DB_PASSWORD` | `postgres` (dev/test only) | Required with no default in prod |
-| `DB_URL` | — | Required in prod — full JDBC URL |
-| `JWT_SECRET` | insecure default (dev/test only) | Required with no default in prod, min 32 chars |
+| `DB_URL` | dev, prod | Full JDBC URL including `?sslmode=require` for Neon |
+| `DB_USERNAME` | dev, prod | |
+| `DB_PASSWORD` | dev, prod | |
+| `JWT_SECRET` | prod | Min 32 chars. Dev has insecure default in `application-dev.properties` |
 
 ---
 
@@ -111,7 +122,7 @@ Migrations: `src/main/resources/db/migration/V{n}__{description}.sql`
 ### Migration order
 
 ```
-V1  users, roles, user_roles, user_credentials, user_oauth_providers, user_profiles
+V1  users, roles, user_roles, user_credentials, user_oauth_providers, user_profiles  ← DONE
 V2  sites
 V3  site_entries (ltree extension, UNIQUE (site_id, path), indexes)
 V4  site_drafts, site_published, site_entry_drafts, site_entry_published
