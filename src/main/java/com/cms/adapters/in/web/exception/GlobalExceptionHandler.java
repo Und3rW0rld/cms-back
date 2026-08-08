@@ -4,6 +4,7 @@ import com.cms.adapters.config.filter.CorrelationIdFilter;
 import com.cms.domain.exception.ConflictException;
 import com.cms.domain.exception.NotFoundException;
 import com.cms.domain.exception.PreconditionFailedException;
+import com.cms.domain.shared.ContentTooLargeException;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
@@ -13,6 +14,7 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.List;
 
@@ -36,6 +38,23 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handlePreconditionFailed(PreconditionFailedException ex) {
         return ResponseEntity.status(HttpStatus.PRECONDITION_FAILED)
                 .body(ErrorResponse.of(412, "PRECONDITION_FAILED", ex.getMessage(), correlationId()));
+    }
+
+    @ExceptionHandler(ContentTooLargeException.class)
+    public ResponseEntity<ErrorResponse> handleContentTooLarge(ContentTooLargeException ex) {
+        // ContentTooLargeException indicates domain-level validation failed (content > 1MB)
+        // Return the specific message from the domain exception
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(ErrorResponse.of(413, "PAYLOAD_TOO_LARGE", ex.getMessage(), correlationId()));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ErrorResponse> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException ex) {
+        // MaxUploadSizeExceededException indicates transport/HTTP layer limit was exceeded (> 2MB multipart upload)
+        // Return a generic message since the actual size is not always available
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(ErrorResponse.of(413, "PAYLOAD_TOO_LARGE",
+                        "Request body exceeds the maximum allowed size (2MB)", correlationId()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

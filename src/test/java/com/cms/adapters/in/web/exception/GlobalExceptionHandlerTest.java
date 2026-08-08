@@ -150,4 +150,30 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().correlationId()).isNull();
     }
+
+    @Test
+    void shouldReturn413ForContentTooLargeException() {
+        ResponseEntity<ErrorResponse> response = handler.handleContentTooLarge(
+                new com.cms.domain.shared.ContentTooLargeException("Content exceeds 1MB limit"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(413);
+        assertThat(response.getBody().error()).isEqualTo("PAYLOAD_TOO_LARGE");
+        assertThat(response.getBody().message()).isEqualTo("Content exceeds 1MB limit");
+        assertThat(response.getBody().correlationId()).isEqualTo(TEST_CORRELATION_ID);
+    }
+
+    @Test
+    void shouldReturn413ForMaxUploadSizeExceededException() {
+        ResponseEntity<ErrorResponse> response = handler.handleMaxUploadSizeExceeded(
+                new org.springframework.web.multipart.MaxUploadSizeExceededException(2 * 1024 * 1024));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(413);
+        assertThat(response.getBody().error()).isEqualTo("PAYLOAD_TOO_LARGE");
+        assertThat(response.getBody().message()).isEqualTo("Request body exceeds the maximum allowed size (2MB)");
+        assertThat(response.getBody().correlationId()).isEqualTo(TEST_CORRELATION_ID);
+    }
 }
