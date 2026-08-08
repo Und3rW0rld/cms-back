@@ -28,9 +28,10 @@ class ContentSizeValidatorTest {
     }
 
     @Test
-    void shouldPassForContentExactlyAtLimit() {
-        // A map with content just under 1MB — the overhead of JSON serialization
-        // means we use slightly less than MAX_BYTES for the value
+    void shouldPassForContentJustBelowLimit() {
+        // JSON serialization adds overhead (quotes, escaping, braces, key names),
+        // so we use less than MAX_BYTES for the raw value to stay within 1MB after serialization.
+        // This test verifies that the validator correctly counts serialized bytes, not raw string length.
         Map<String, Object> content = new HashMap<>();
         content.put("body", "x".repeat(ContentSizeValidator.MAX_BYTES - 100));
 
@@ -40,5 +41,17 @@ class ContentSizeValidatorTest {
     @Test
     void shouldPassForEmptyContent() {
         assertThatNoException().isThrownBy(() -> ContentSizeValidator.validate(Map.of()));
+    }
+
+    @Test
+    void shouldThrowIllegalArgumentForSerializationError() {
+        // Circular reference causes Jackson to fail serialization.
+        // This should throw IllegalArgumentException (server-side issue), not ContentTooLargeException.
+        Map<String, Object> content = new HashMap<>();
+        content.put("self", content); // Circular reference
+
+        assertThatThrownBy(() -> ContentSizeValidator.validate(content))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("server-side issue");
     }
 }

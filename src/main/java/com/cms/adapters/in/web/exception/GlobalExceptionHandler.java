@@ -40,11 +40,21 @@ public class GlobalExceptionHandler {
                 .body(ErrorResponse.of(412, "PRECONDITION_FAILED", ex.getMessage(), correlationId()));
     }
 
-    @ExceptionHandler({ContentTooLargeException.class, MaxUploadSizeExceededException.class})
-    public ResponseEntity<ErrorResponse> handlePayloadTooLarge(Exception ex) {
+    @ExceptionHandler(ContentTooLargeException.class)
+    public ResponseEntity<ErrorResponse> handleContentTooLarge(ContentTooLargeException ex) {
+        // ContentTooLargeException indicates domain-level validation failed (content > 1MB)
+        // Return the specific message from the domain exception
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(ErrorResponse.of(413, "PAYLOAD_TOO_LARGE", ex.getMessage(), correlationId()));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ErrorResponse> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException ex) {
+        // MaxUploadSizeExceededException indicates transport/HTTP layer limit was exceeded (> 2MB multipart upload)
+        // Return a generic message since the actual size is not always available
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
                 .body(ErrorResponse.of(413, "PAYLOAD_TOO_LARGE",
-                        "Request body exceeds the allowed size limit", correlationId()));
+                        "Request body exceeds the maximum allowed size (2MB)", correlationId()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
