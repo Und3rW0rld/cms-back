@@ -1,293 +1,37 @@
-# Architecture and data model — Headless CMS
-
-## Status
-This document reflects the current design decisions. It is a living document — update it before implementing any section.
-
----
+# Headless CMS — Architecture and Data Model
 
 ## Strategic positioning
 
-**Target:** SaaS multi-tenant headless CMS. Initial user is the author (portfolio use case). Architecture is designed for B (multi-tenant SaaS), built for A first (single user, known use case).
-
-**Rule:** design for B, build for A. Decisions that are cheap now and expensive later are made now. Features that only make sense with real users are deferred.
+SaaS multi-tenant headless CMS. Initial user is the author. Principle: **design for scale, build for the known use case first**. Decisions that are cheap now and expensive later are made upfront. Features that only make sense with real users are deferred explicitly.
 
 ---
 
-## Checklist
+## 1. System overview
 
-- [x] Single database: PostgreSQL only — MongoDB removed
-- [x] JSONB for all content — same flexibility, one system
-- [x] ltree for entry hierarchy — replaces parent_id adjacency list
-- [x] No status column — publication state from row existence in site_published
-- [x] Optimistic locking on drafts (version + ETag/If-Match)
-- [x] Generic content model: Map<String, Object> for now
-- [x] /cms/** user resources, /public/** read-only, /auth/**, /admin/** reserved
-- [x] ADMIN + EDITOR roles only
-- [x] sort_order (not order)
-- [x] contentSchema on sites
-- [x] Delete cascade behavior defined
-- [x] Pagination on public entries
-- [x] ?parentId=root for top-level entries
-- [x] Rate limiting on /public/** and /cms/**
-- [x] Cache with TTL + evict on publish/unpublish/delete
-- [x] 1MB content size cap
-- [x] plan_id NULL on users (future monetization hook)
-- [x] site_collaborators table created empty (future per-site roles)
-- [x] media_assets table created empty (future uploads)
-- [x] site_domains table created empty (future custom domains)
-- [x] site_webhooks table created empty (future webhooks)
+A **site** is the root publishable unit — a portfolio, blog, product page, or anything else. A site contains **entries**: any content that needs its own page (posts, projects, series, etc.).
 
----
-
-## Confirmed design decisions
-
-| Decision | Resolution |
-|---|---|
-| Database | PostgreSQL only. JSONB for content. MongoDB removed |
-| Why single DB | Transactions, RLS, ltree, one system to operate — no cross-DB join in application layer |
-| PG responsibility | Everything: identity, metadata, content (JSONB), publication state (row existence) |
-| Publication state | Row existence in `site_published` / `site_entry_published`. No status column |
-| Content model | `JSONB` column — `Map<String, Object>` at application level. Backend does not interpret structure |
-| Content size cap | 1MB — validated in use case before writing |
-| Entry hierarchy | `ltree` extension. `path LTREE` column on `site_entries`. Cycles impossible by construction |
-| Top-level entries | `?parentId=root` = entries where path is depth 1 |
-| Optimistic locking | `version: Long` on draft rows. ETag/If-Match. 412 on mismatch |
-| PATCH metadata | Last-write-wins — intentional |
-| Publish | Upsert into `site_published` in a single transaction. Copies draft content |
-| Unpublish | Deletes row from `site_published`. Public returns 404 |
-| Delete site | Transaction: deletes `site_entries`, `site_drafts`, `site_published`, all entry drafts/published |
-| Delete entry without children | Deletes row + draft + published rows |
-| Delete entry with children | Returns 409 |
-| Roles | `ADMIN` = `/admin/**`. `EDITOR` = own sites via `/cms/**`. VIEWER dropped |
-| Per-site collaboration | `site_collaborators` table created, no logic yet |
-| contentSchema | `VARCHAR(100) NULL`. Breaking change for consumers if modified in production |
-| Pagination | Public entries: default 20, max 200 |
-| ?type filter | Query PG `(site_id, type)` index → no secondary fetch needed (content in same DB) |
-| Rate limiting | `/public/**` ~20 req/s per IP; `/cms/**` ~10 req/s per user |
-| Cache | Caffeine `expireAfterWrite=1h`. Evict on publish, unpublish, delete |
-| Autoguardado | Frontend concern. Backend exposes `PUT .../draft` |
-| Concurrent publish | Last-write-wins — acceptable for human action |
-| plan_id | `UUID NULL` on `users` — hook for future monetization. No logic yet |
-| Media | `media_assets` table created. No upload logic yet |
-| Custom domains | `site_domains` table created. No logic yet |
-| Webhooks | `site_webhooks` table created. No logic yet |
-| content_types | Deferred — implement when second type of client has different schema needs |
-| RLS | Deferred — implement when enterprise clients require engine-level tenant isolation |
-| i18n | Deferred — implement when a concrete client requests it |
-| Preview tokens | Deferred — implement when a client has a static frontend |
-| JWT refresh/revocation | Pending — not defined yet |
-| OAuth2 social login | Pending — schema ready. Resolve email-merge edge case first |
-
----
-
-## 1. System objective
-
-This backend is a **multi-user headless CMS**. It does not render HTML — it delivers JSON.
-
-A **site** is the root publishable unit. It can represent a portfolio, blog, product page, CV, or anything else. A site contains **entries** — any content with its own page (posts, projects, series, etc.).
-
-Two consumer types from a single API:
-- **CMS UI** — logs in, edits drafts, publishes
+The API has three consumer types:
+- **CMS UI** — authenticated, edits drafts, publishes
 - **Each user's frontend** — reads published content, no authentication
+- **System admin** — `/admin/**`, reserved, not yet implemented
 
 ---
 
-## 2. Architecture
+## 2. Technology decisions
 
-### 2.1 Functional domain split
-
-**A. Identity & Access** — users, JWT, roles
-
-**B. Site Management** — sites, entries, draft/publish lifecycle
-
-**C. Public Content Delivery** — public endpoints, always serves published rows
-
----
-
-### 2.2 Hexagonal architecture
-
-**Domain models:** `Site`, `SiteEntry`
-
-**Input ports:**
-- `CreateSiteUseCase`, `UpdateSiteDraftUseCase`, `PublishSiteUseCase`, `UnpublishSiteUseCase`, `DeleteSiteUseCase`, `GetSitePublicUseCase`
-- `CreateEntryUseCase`, `UpdateEntryDraftUseCase`, `PublishEntryUseCase`, `UnpublishEntryUseCase`, `DeleteEntryUseCase`, `GetEntryPublicUseCase`
-
-**Outbound ports:**
-- `SiteRepository`, `SiteDraftRepository`, `SitePublishedRepository`
-- `SiteEntryRepository`, `SiteEntryDraftRepository`, `SiteEntryPublishedRepository`
+| Concern | Choice | Why |
+|---|---|---|
+| Database | PostgreSQL only | Single system: transactions, ltree, RLS, JSONB — no cross-DB joins |
+| Content storage | `JSONB` columns | Flexible schema, GIN-indexable, TOAST for large values, same DB as metadata |
+| Entry hierarchy | `ltree` extension | Acyclic by construction, depth-unlimited, efficient subtree queries, atomic moves |
+| Publication state | Row existence in `*_published` tables | Single source of truth — no status column to sync |
+| Auth | Stateless JWT | Standard for headless APIs |
 
 ---
 
-### 2.3 Persistence strategy
+## 3. Database schema
 
-**Single database: PostgreSQL.**
-
-- Metadata and identity: normalized relational tables
-- Content: `JSONB` columns — flexible schema, GIN-indexable, TOAST for large values
-- Publication state: row existence in `site_published` / `site_entry_published`
-- Hierarchy: `ltree` extension on `site_entries`
-- All operations within a single transaction when needed
-
----
-
-## 3. Domain model
-
-### 3.1 `Site`
-
-```text
-Site
-- id: UUID
-- ownerUserId: Long
-- title: String
-- summary: String          ← CMS listing metadata, not derived from content
-- contentSchema: String?   ← e.g. "portfolio-v1". Hint for frontend rendering.
-                              Changing in production is breaking for deployed frontends.
-- createdAt: Instant
-- updatedAt: Instant
-```
-
----
-
-### 3.2 `SiteEntry`
-
-```text
-SiteEntry
-- id: UUID
-- siteId: UUID
-- path: LTree              ← e.g. "root.series_uuid.entry_uuid"
-- type: String             ← frontend label: "post", "project", "series" — not validated
-- sortOrder: Integer?
-- createdAt: Instant
-- updatedAt: Instant
-```
-
-**ltree rules:**
-- Root entries: path = `root.{entryId}`
-- Children: path = `parent.path.{entryId}`
-- Descendants of X: `WHERE path <@ 'root.seriesId'`
-- Ancestors of X: `WHERE path @> 'root.seriesId.entryId'`
-- Move entry (and all descendants) to new parent: update path in a single transaction
-- Cycles: **impossible by construction** — ltree is acyclic by definition
-
-**Querying:**
-- `?parentId=root` → `WHERE site_id = ? AND nlevel(path) = 1`
-- `?parentId={id}` → `WHERE path <@ '{parentPath}.{id}' AND nlevel(path) = nlevel(parentPath)+2`
-
----
-
-### 3.3 Draft and published rows
-
-All content is `JSONB`. Backend never interprets structure. Maximum size: **1MB**.
-
-#### `site_drafts`
-```text
-- id: UUID PK (= siteId, 1:1)
-- site_id: UUID UNIQUE FK sites(id)
-- version: Long            ← optimistic locking, starts at 1
-- content: JSONB
-- updated_at: Timestamp
-```
-Created with `content: '{}'` when site is created. Upserted on every save.
-
-#### `site_published`
-```text
-- id: UUID PK (= siteId, 1:1)
-- site_id: UUID UNIQUE FK sites(id)
-- content: JSONB           ← snapshot from draft at publish time
-- published_at: Timestamp
-```
-**Its existence means the site is published.** Created/overwritten on publish. Deleted on unpublish or site delete.
-
-#### `site_entry_drafts`
-```text
-- id: UUID PK (= entryId, 1:1)
-- entry_id: UUID UNIQUE FK site_entries(id)
-- site_id: UUID FK sites(id)
-- version: Long
-- content: JSONB
-- updated_at: Timestamp
-```
-
-#### `site_entry_published`
-```text
-- id: UUID PK (= entryId, 1:1)
-- entry_id: UUID UNIQUE FK site_entries(id)
-- site_id: UUID FK sites(id)
-- content: JSONB
-- published_at: Timestamp
-```
-**Its existence means the entry is published.** Deleted on unpublish or delete.
-
----
-
-### 3.4 Optimistic locking
-
-```
-GET /cms/sites/{id}/draft
-← 200 { "content": {...}, "version": 3 }
-    ETag: "3"
-
-PUT /cms/sites/{id}/draft
-    If-Match: "3"
-    Body: { "content": {...} }
-← 200 { "content": {...}, "version": 4 }
-← 412 if server version != 3
-```
-
-Frontend 412 handling: *"Someone else saved changes. Reload to continue."*
-
-PATCH metadata (`title`, `summary`, `contentSchema`) is last-write-wins — intentional.
-
----
-
-### 3.5 Publish transaction
-
-```sql
-BEGIN;
-  INSERT INTO site_published (site_id, content, published_at)
-  SELECT site_id, content, NOW() FROM site_drafts WHERE site_id = ?
-  ON CONFLICT (site_id) DO UPDATE
-    SET content = EXCLUDED.content, published_at = EXCLUDED.published_at;
-  -- update sites.updated_at if needed
-COMMIT;
-```
-
-Single transaction. No cross-database inconsistency possible.
-
----
-
-### 3.6 Example content (JSONB)
-
-```json
-// site_drafts.content — portfolio
-{
-  "seo": { "title": "Santiago | Backend Dev", "description": "..." },
-  "hero": { "greeting": "Hi, I'm", "name": "Santiago" },
-  "skills": [{ "name": "Java", "slug": "openjdk" }],
-  "jobs": [{ "company": "Acme", "role": "Backend Dev" }]
-}
-
-// site_entry_drafts.content — blog post
-{
-  "title": "Designing hexagonal APIs",
-  "date": "2026-07-18",
-  "body": "# Introduction\n\nHexagonal architecture separates...",
-  "tags": ["architecture", "spring"],
-  "readTime": "8 min read"
-}
-
-// site_entry_drafts.content — series index
-{
-  "title": "Hexagonal Architecture Series",
-  "description": "A 3-part series on building clean Java backends."
-}
-```
-
----
-
-## 4. PostgreSQL schema
-
-### User identity
+### 3.1 User identity
 
 ```sql
 users
@@ -295,26 +39,26 @@ users
 - email         VARCHAR(100) NOT NULL UNIQUE
 - name          VARCHAR(100) NOT NULL
 - enabled       BOOLEAN NOT NULL DEFAULT TRUE
-- plan_id       UUID NULL FK plans(id)    ← NULL until monetization is implemented
+- plan_id       UUID NULL                      -- no FK until plans logic exists
 - created_at    TIMESTAMP NOT NULL
 - updated_at    TIMESTAMP NOT NULL
 
 roles
 - id            SERIAL PK
-- name          VARCHAR(50) NOT NULL UNIQUE   -- ADMIN | EDITOR
+- name          VARCHAR(50) NOT NULL UNIQUE    -- ADMIN | EDITOR
 
 user_roles
 - user_id       BIGINT NOT NULL FK users(id)
 - role_id       INT NOT NULL FK roles(id)
 - PK (user_id, role_id)
 
-user_credentials
+user_credentials                               -- local email/password login
 - user_id       BIGINT PK FK users(id)
 - password_hash VARCHAR(255) NOT NULL
 - created_at    TIMESTAMP NOT NULL
-- updated_at    TIMESTAMP NOT NULL
+- updated_at    TIMESTAMP NOT NULL             -- tracks password rotation
 
-user_oauth_providers
+user_oauth_providers                           -- Google, GitHub, etc. (future)
 - id                BIGSERIAL PK
 - user_id           BIGINT NOT NULL FK users(id)
 - provider          VARCHAR(30) NOT NULL        -- GOOGLE | GITHUB
@@ -322,86 +66,126 @@ user_oauth_providers
 - created_at        TIMESTAMP NOT NULL
 - UNIQUE (provider, provider_user_id)
 
-user_profiles
+user_profiles                                  -- optional enriched data
 - user_id       BIGINT PK FK users(id)
 - last_name     VARCHAR(100) NULL
 - phone         VARCHAR(30) NULL
 - bio           TEXT NULL
 - avatar_url    VARCHAR(500) NULL
 - website       VARCHAR(255) NULL
-- metadata      JSONB NULL DEFAULT '{}'
+- metadata      JSONB NULL DEFAULT '{}'        -- free-form fields, no migration needed
 - updated_at    TIMESTAMP NOT NULL
 ```
 
-### Sites and entries
+### 3.2 Sites
 
 ```sql
-CREATE EXTENSION IF NOT EXISTS ltree;
-
 sites
 - id                UUID PK
 - owner_user_id     BIGINT NOT NULL FK users(id)
 - title             VARCHAR(150) NOT NULL
-- summary           VARCHAR(255) NULL
-- content_schema    VARCHAR(100) NULL
+- summary           VARCHAR(255) NULL          -- CMS listing display, not derived from content
+- content_schema    VARCHAR(100) NULL          -- e.g. "portfolio-v1", hint for frontend rendering
 - created_at        TIMESTAMP NOT NULL
 - updated_at        TIMESTAMP NOT NULL
+```
 
--- No status column. Published = row exists in site_published.
+> **`content_schema`:** written by the CMS UI, read by the public frontend to know how to render the content. Changing it in production is a **breaking change** for deployed frontends.
+
+### 3.3 Entries
+
+```sql
+CREATE EXTENSION IF NOT EXISTS ltree;
 
 site_entries
-- id                UUID PK
-- site_id           UUID NOT NULL FK sites(id)
-- path              LTREE NOT NULL
-- type              VARCHAR(50) NOT NULL
-- sort_order        INT NULL
-- created_at        TIMESTAMP NOT NULL
-- updated_at        TIMESTAMP NOT NULL
+- id            UUID PK
+- site_id       UUID NOT NULL FK sites(id)
+- path          LTREE NOT NULL
+- type          VARCHAR(50) NOT NULL           -- frontend label: "post", "project", "series", etc.
+- sort_order    INT NULL
+- created_at    TIMESTAMP NOT NULL
+- updated_at    TIMESTAMP NOT NULL
 
--- No status column. Published = row exists in site_entry_published.
-
+CREATE UNIQUE INDEX idx_site_entries_site_path ON site_entries (site_id, path);
 CREATE INDEX idx_site_entries_path_gist ON site_entries USING GIST (path);
-CREATE INDEX idx_site_entries_site_path ON site_entries (site_id, path);
-CREATE INDEX idx_site_entries_type      ON site_entries (site_id, type);
+CREATE INDEX idx_site_entries_type ON site_entries (site_id, type);
+```
 
+**ltree path segments:** UUID with `-` replaced by `_` (ltree only accepts `[A-Za-z0-9_]`).
+
+```java
+// Build segment
+String segment = entryId.toString().replace('-', '_');
+// path = "root." + segment  (root entry)
+// path = parentPath + "." + segment  (child entry)
+
+// Recover UUID from segment
+UUID id = UUID.fromString(segment.replace('_', '-'));
+```
+
+The original UUID always lives in the `id` column. The path is only used for hierarchy queries.
+
+**Why ltree instead of `parent_id`:**
+- Cycles are impossible by construction — ltree is acyclic by definition
+- Get all descendants: `WHERE path <@ 'root.abc_123'` — single indexed query
+- Get direct children: `WHERE path <@ parent_path AND nlevel(path) = nlevel(parent_path) + 1`
+- Move entry and all descendants: one `UPDATE` with `subpath()` in a transaction
+- No recursive CTEs, no cycle detection code
+
+### 3.4 Content tables
+
+All content is `JSONB`. The backend never interprets the content structure — it stores and serves it as-is. Maximum size: **1MB** (validated in use case).
+
+```sql
 site_drafts
-- site_id           UUID PK FK sites(id)
-- version           BIGINT NOT NULL DEFAULT 1
-- content           JSONB NOT NULL DEFAULT '{}'
-- updated_at        TIMESTAMP NOT NULL
+- site_id       UUID PK FK sites(id)
+- version       BIGINT NOT NULL DEFAULT 1
+- content       JSONB NOT NULL DEFAULT '{}'
+                CONSTRAINT chk_site_draft_obj CHECK (jsonb_typeof(content) = 'object')
+- updated_at    TIMESTAMP NOT NULL
 
 site_published
-- site_id           UUID PK FK sites(id)
-- content           JSONB NOT NULL
-- published_at      TIMESTAMP NOT NULL
+- site_id       UUID PK FK sites(id)
+- content       JSONB NOT NULL
+                CONSTRAINT chk_site_pub_obj CHECK (jsonb_typeof(content) = 'object')
+- published_at  TIMESTAMP NOT NULL
 
 site_entry_drafts
-- entry_id          UUID PK FK site_entries(id)
-- site_id           UUID NOT NULL FK sites(id)
-- version           BIGINT NOT NULL DEFAULT 1
-- content           JSONB NOT NULL DEFAULT '{}'
-- updated_at        TIMESTAMP NOT NULL
+- entry_id      UUID PK FK site_entries(id)
+- site_id       UUID NOT NULL FK sites(id)
+- version       BIGINT NOT NULL DEFAULT 1
+- content       JSONB NOT NULL DEFAULT '{}'
+                CONSTRAINT chk_entry_draft_obj CHECK (jsonb_typeof(content) = 'object')
+- updated_at    TIMESTAMP NOT NULL
 
 site_entry_published
-- entry_id          UUID PK FK site_entries(id)
-- site_id           UUID NOT NULL FK sites(id)
-- content           JSONB NOT NULL
-- published_at      TIMESTAMP NOT NULL
+- entry_id      UUID PK FK site_entries(id)
+- site_id       UUID NOT NULL FK sites(id)
+- content       JSONB NOT NULL
+                CONSTRAINT chk_entry_pub_obj CHECK (jsonb_typeof(content) = 'object')
+- published_at  TIMESTAMP NOT NULL
 
 CREATE INDEX idx_entry_published_site ON site_entry_published (site_id);
 ```
 
-### Future tables — created now, no logic yet
+**Publication state:** a site or entry is published if and only if its corresponding `*_published` row exists. No status column. Public endpoints return `404` when the row is absent.
+
+**Draft initialization:** on create, draft row is inserted with `content = '{}'` and `version = 1`. `GET .../draft` always returns `200` if the resource exists.
+
+### 3.5 Future tables — created now, no logic yet
+
+These tables exist in the schema from day one to avoid painful migrations later.
 
 ```sql
--- Per-site collaboration (future roles per site)
+-- Per-site collaboration
+-- Note: roles prefixed SITE_ to avoid ambiguity with global roles in user_roles
 site_collaborators
 - site_id       UUID NOT NULL FK sites(id)
 - user_id       BIGINT NOT NULL FK users(id)
-- role          VARCHAR(30) NOT NULL   -- OWNER | EDITOR | AUTHOR | VIEWER
+- role          VARCHAR(30) NOT NULL  -- SITE_OWNER | SITE_EDITOR | SITE_AUTHOR | SITE_VIEWER
 - PK (site_id, user_id)
 
--- Media uploads
+-- File uploads
 media_assets
 - id            UUID PK
 - owner_user_id BIGINT NOT NULL FK users(id)
@@ -422,16 +206,17 @@ site_domains
 - dns_challenge JSONB NULL
 - created_at    TIMESTAMP NOT NULL
 
--- Webhooks on publish/unpublish
+-- Publish/unpublish webhooks
 site_webhooks
 - id            UUID PK
 - site_id       UUID NOT NULL FK sites(id)
 - url           VARCHAR(500) NOT NULL
-- events        TEXT[] NOT NULL   -- ['publish', 'unpublish', 'delete']
+- events        TEXT[] NOT NULL       -- e.g. ['publish', 'unpublish']
 - secret        VARCHAR(255) NULL
 - created_at    TIMESTAMP NOT NULL
 
--- Pricing plans (future)
+-- Pricing plans
+-- Add FK users.plan_id -> plans(id) in the migration that activates this
 plans
 - id            UUID PK
 - name          VARCHAR(50) NOT NULL UNIQUE   -- FREE | PRO | BUSINESS
@@ -443,146 +228,263 @@ plans
 
 ---
 
-## 5. Endpoints
+## 4. Draft/publish lifecycle
 
-### 5.1 Authentication
+### Optimistic locking on drafts
+
+Two browser tabs or two concurrent users cannot silently overwrite each other.
+
 ```
-POST /auth/register
+GET /cms/sites/{id}/draft
+← 200  { "content": {...}, "version": 3 }
+        ETag: "3"
+
+PUT /cms/sites/{id}/draft
+    If-Match: "3"
+    Body: { "content": {...} }
+← 200  { "content": {...}, "version": 4 }   -- version incremented
+← 412  if server version != 3
+```
+
+Frontend 412 handling: *"Someone else saved changes. Reload to continue."*
+
+The same pattern applies to `site_entry_drafts`.
+
+`PUT .../draft` without `If-Match` must be rejected — always required.
+
+### Publish
+
+Single transaction — no inconsistency possible:
+
+```sql
+BEGIN;
+  INSERT INTO site_published (site_id, content, published_at)
+  SELECT site_id, content, NOW() FROM site_drafts WHERE site_id = ?
+  ON CONFLICT (site_id) DO UPDATE
+    SET content = EXCLUDED.content,
+        published_at = EXCLUDED.published_at;
+COMMIT;
+```
+
+### Unpublish
+
+Deletes the `*_published` row. Public endpoint returns `404` until next publish.
+
+### Autoguardado
+
+Frontend concern — calls `PUT .../draft` on a timer. Backend has no special logic for it.
+
+### PATCH metadata
+
+`title`, `summary`, `contentSchema` on `PATCH /cms/sites/{id}` is last-write-wins — intentional. Metadata edits are infrequent and manual.
+
+### Concurrent publish
+
+Two simultaneous publish clicks: last one wins. Acceptable for a human action.
+
+### Delete cascade — explicit in use case, not in DDL
+
+Cascades are written explicitly in use case code, not as `ON DELETE CASCADE` in DDL. This keeps the intent visible in code and makes it easy to add side effects (webhook calls, media cleanup) later.
+
+**Delete site:**
+```
+BEGIN transaction
+  DELETE FROM site_entry_published WHERE site_id = ?
+  DELETE FROM site_entry_drafts    WHERE site_id = ?
+  DELETE FROM site_entries         WHERE site_id = ?
+  DELETE FROM site_published       WHERE site_id = ?
+  DELETE FROM site_drafts          WHERE site_id = ?
+  DELETE FROM sites                WHERE id = ?
+COMMIT
+```
+
+**Delete entry:**
+```
+BEGIN transaction
+  IF EXISTS (SELECT 1 FROM site_entries WHERE path <@ entry_path AND id != entry_id)
+    → return 409 Conflict — delete children first
+  DELETE FROM site_entry_published WHERE entry_id = ?
+  DELETE FROM site_entry_drafts    WHERE entry_id = ?
+  DELETE FROM site_entries         WHERE id = ?
+COMMIT
+```
+
+---
+
+## 5. Roles and access
+
+| Role | Scope | Access |
+|---|---|---|
+| `ADMIN` | Global | `/admin/**` — future system operations |
+| `EDITOR` | Global | `/cms/**` — manages own sites and entries |
+
+**Default role on `POST /auth/register`:** `EDITOR`.
+
+`VIEWER` is not implemented. Per-site collaboration roles (`SITE_EDITOR`, etc.) live in `site_collaborators` and are deferred.
+
+---
+
+## 6. Endpoints
+
+### 6.1 Authentication
+```
+POST /auth/register     -- assigns EDITOR role by default
 POST /auth/login
 ```
 
-### 5.2 /cms — authenticated, user's own resources
+### 6.2 /cms — authenticated, user's own resources
 
 **Sites**
 ```
 POST   /cms/sites
-GET    /cms/sites                     ← user's sites; published state from site_published JOIN
+GET    /cms/sites                           -- user's sites + published state via LEFT JOIN
 GET    /cms/sites/{id}
-PATCH  /cms/sites/{id}                ← title, summary, contentSchema (last-write-wins)
-DELETE /cms/sites/{id}                ← transaction: cascades entries, drafts, published rows
+PATCH  /cms/sites/{id}                      -- title, summary, contentSchema (last-write-wins)
+DELETE /cms/sites/{id}                      -- cascades all entries and content rows
 ```
 
 **Site draft/publish**
 ```
-GET    /cms/sites/{id}/draft          ← content + version as ETag
-PUT    /cms/sites/{id}/draft          ← If-Match required; 412 on mismatch; 1MB cap
-POST   /cms/sites/{id}/publish        ← upserts site_published in transaction
-POST   /cms/sites/{id}/unpublish      ← deletes site_published row
+GET    /cms/sites/{id}/draft                -- returns content + version (ETag header)
+PUT    /cms/sites/{id}/draft                -- If-Match required; 412 on mismatch; 1MB cap
+POST   /cms/sites/{id}/publish
+POST   /cms/sites/{id}/unpublish            -- deletes site_published row
 ```
 
 **Entries**
 ```
 POST   /cms/sites/{id}/entries
-GET    /cms/sites/{id}/entries        ← ?type=post, ?parentId=root, ?parentId={uuid}
+GET    /cms/sites/{id}/entries              -- ?type=, ?parentId=root, ?parentId={uuid}
 GET    /cms/sites/{id}/entries/{entryId}
-PATCH  /cms/sites/{id}/entries/{entryId}   ← type, sort_order, parentId (ltree path update)
-DELETE /cms/sites/{id}/entries/{entryId}   ← 409 if has children; cascades drafts/published
+PATCH  /cms/sites/{id}/entries/{entryId}    -- type, sort_order, parentId (updates ltree path)
+DELETE /cms/sites/{id}/entries/{entryId}    -- 409 if has children
 ```
 
 **Entry draft/publish**
 ```
 GET    /cms/sites/{id}/entries/{entryId}/draft
-PUT    /cms/sites/{id}/entries/{entryId}/draft     ← If-Match required; 412 on mismatch; 1MB cap
+PUT    /cms/sites/{id}/entries/{entryId}/draft    -- If-Match required; 1MB cap
 POST   /cms/sites/{id}/entries/{entryId}/publish
-POST   /cms/sites/{id}/entries/{entryId}/unpublish ← deletes site_entry_published row
+POST   /cms/sites/{id}/entries/{entryId}/unpublish
 ```
 
-### 5.3 /public — unauthenticated read-only
+### 6.3 /public — unauthenticated read-only
+
 ```
 GET /public/sites/{id}
-    ← site_published content + contentSchema
-    ← 404 if no site_published row
+    -- returns site_published.content + contentSchema
+    -- 404 if site_published row does not exist
 
 GET /public/sites/{id}/entries
-    ← entries with existing site_entry_published row
-    ← ?type=post, ?parentId=root, ?parentId={uuid}
-    ← ?limit=20 (default), max 200
+    -- returns entries with existing site_entry_published row
+    -- ?type=post  → queries idx_site_entries_type, joins site_entry_published
+    -- ?parentId=root  → nlevel(path) = 1
+    -- ?parentId={uuid} → path <@ parentPath AND nlevel = nlevel(parentPath) + 1
+    -- ?limit=20 (default), max 200
 
 GET /public/sites/{id}/entries/{entryId}
-    ← 404 if no site_entry_published row
+    -- 404 if site_entry_published row does not exist
 ```
 
-### 5.4 /admin — reserved, not implemented
-```
-GET /admin/users
-GET /admin/sites
-```
+### 6.4 /admin — reserved, not yet implemented
 
 ---
 
-## 6. Editorial flow
+## 7. CMS listing — published state
 
-### Site
-1. Create → `sites` row + `site_drafts` row `{ content: '{}', version: 1 }`
-2. Edit → `PUT /cms/sites/{id}/draft` with `If-Match: {version}` → version incremented
-3. Publish → transaction: upsert `site_published` from `site_drafts.content`
-4. Public reads `site_published` — 404 if row absent
-5. Unpublish → delete `site_published` row
-
-### Entry
-Same flow, independent lifecycle:
-1. Create → `site_entries` row (path assigned) + `site_entry_drafts` row `{ content: '{}', version: 1 }`
-2. Edit → `PUT .../draft` with `If-Match`
-3. Publish → upsert `site_entry_published`
-4. Unpublish → delete `site_entry_published` row
-
-### Published state in CMS listing
 ```sql
-SELECT s.*, sp.published_at IS NOT NULL AS is_published
+SELECT s.*, (sp.site_id IS NOT NULL) AS is_published
 FROM sites s
 LEFT JOIN site_published sp ON sp.site_id = s.id
 WHERE s.owner_user_id = ?
 ```
-Single query. No application-layer join needed.
 
-### Move entry to new parent (ltree)
+Single query. No application-layer merge.
+
+---
+
+## 8. Move entry — ltree path update
+
 ```sql
 BEGIN;
   UPDATE site_entries
-  SET path = ? || subpath(path, nlevel(old_parent_path))
-  WHERE site_id = ? AND path <@ old_entry_path;
+  SET path = CAST(
+    :newParentPath || '.' || subpath(path, nlevel(CAST(:oldParentPath AS ltree)))
+    AS ltree
+  )
+  WHERE site_id = :siteId
+    AND path <@ CAST(:oldEntryPath AS ltree);
 COMMIT;
 ```
-Moves entry and all descendants atomically.
 
-### Series
-1. Create entry with `type: "series"` → path = `root.{seriesId}`
-2. Create children → path = `root.{seriesId}.{entryId}`
-3. `GET .../entries?parentId={seriesId}` → `WHERE path <@ 'root.seriesId' AND nlevel(path) = 2`
-4. No cycle detection needed — ltree is acyclic by construction
+Moves the entry and all descendants atomically.
 
-### Delete cascade
-```sql
-BEGIN;
-  -- Check no children
-  -- Delete entry_published, entry_drafts, site_entries row
-COMMIT;
+---
+
+## 9. Content model example
+
+```json
+// site_drafts.content — portfolio
+{
+  "seo":    { "title": "Santiago | Backend Dev", "description": "..." },
+  "hero":   { "greeting": "Hi, I'm", "name": "Santiago" },
+  "skills": [{ "name": "Java", "slug": "openjdk" }],
+  "jobs":   [{ "company": "Acme", "role": "Backend Dev" }]
+}
+
+// site_entry_drafts.content — blog post
+{
+  "title":    "Designing hexagonal APIs",
+  "date":     "2026-07-18",
+  "body":     "# Introduction\n\nHexagonal architecture...",
+  "tags":     ["architecture", "spring"],
+  "readTime": "8 min read"
+}
+
+// site_entry_drafts.content — series index
+{
+  "title":       "Hexagonal Architecture Series",
+  "description": "A 3-part series on building clean Java backends."
+}
 ```
 
 ---
 
-## 7. Business validations
+## 10. Business validations
 
-### Site
-- `title` required
-- Ownership validated in use case
-- Only `EDITOR` role may write
-
-### SiteEntry
-- `type` required, non-blank
-- `parentId` if set must reference an entry within the same site
-- No cycle detection needed — ltree handles it
-
-### Content
-- Must be valid JSON object — not null, not array
-- Serialized size ≤ 1MB
-- Backend does not validate internal structure
+| Entity | Rules |
+|---|---|
+| Site | `title` required. Ownership validated in use case — not only in authentication |
+| SiteEntry | `type` required, non-blank. Backend does not validate its value |
+| Content | Valid JSON object (enforced by DB CHECK). Serialized size ≤ 1MB (enforced in use case) |
 
 ---
 
-## 8. Package structure
+## 11. Public endpoint protection
 
-```text
+### Caching — required before production
+Spring Cache + Caffeine, `expireAfterWrite=1h`. Evict on publish, unpublish, and delete.
+
+```java
+@Cacheable(value = "published-site", key = "#id")
+public PublicSiteResponse getPublished(UUID id) { ... }
+
+@CacheEvict(value = "published-site", key = "#id")
+public void publish(UUID id) { ... }  // also on unpublish and delete
+```
+
+Migrate to Redis when running multiple instances.
+
+### Rate limiting — required before production
+Bucket4j:
+- `/public/**` — ~20 req/s per IP → `429`
+- `/cms/**` — ~10 req/s per authenticated user → `429`
+
+---
+
+## 12. Package structure
+
+```
 src/main/java/com/cms/
 ├── domain/
 │   ├── model/
@@ -590,8 +492,8 @@ src/main/java/com/cms/
 │   │   │   └── User.java
 │   │   └── site/
 │   │       ├── Site.java
-│   │       ├── SiteEntry.java
-│   │       └── PublicationStatus.java
+│   │       └── SiteEntry.java
+│   │       ← no PublicationStatus enum — state = row existence
 │   └── port/
 │       ├── in/
 │       │   ├── site/
@@ -669,115 +571,423 @@ src/main/java/com/cms/
 
 ---
 
-## 9. Public endpoint protection
+## 13. Flyway migration order
 
-### Response caching
-Spring Cache + Caffeine. `expireAfterWrite=1h`. Evict on publish, unpublish, delete.
-Migrate to Redis for multiple instances.
-
-### Rate limiting
-Bucket4j:
-- `/public/**`: ~20 req/s per IP → `429`
-- `/cms/**`: ~10 req/s per authenticated user → `429`
-
-### CDN / reverse proxy — future
-Cloudflare or nginx for volumetric DDoS.
-
----
-
-## 10. Confirmed decisions
-
-### Keep
-- PostgreSQL only — MongoDB removed
-- JSONB for all content
-- ltree for entry hierarchy
-- No status column — row existence = published
-- Optimistic locking on drafts (version + ETag/If-Match + 412)
-- PATCH metadata last-write-wins
-- Concurrent publish last-write-wins
-- `plan_id UUID NULL` on users
-- Future tables created (site_collaborators, media_assets, site_domains, site_webhooks, plans)
-- contentSchema as breaking change warning
-- 1MB content cap
-- Cache with TTL + evict on all state changes
-- Rate limiting on both /public and /cms
-
-### Avoid
-- MongoDB — removed
-- status column in sites or site_entries
-- Typed content classes
-- parent_id adjacency list — use ltree path
-- Cycle detection code — ltree handles it
-- Slug as identifier
-- PUT .../draft without If-Match
-
-### Deferred until real users/clients
-- content_types + content_fields (schema builder)
-- RLS
-- i18n
-- Preview tokens
-- Webhooks logic
-- Custom domains logic
-- Media upload logic
-- site_collaborators logic
-- JWT refresh/revocation strategy
-- OAuth2 social login
-
----
-
-## 11. MVP
-
-### Flyway migrations
 ```
 V1__create_users_schema.sql
+  -- users, roles, user_roles, user_credentials, user_oauth_providers, user_profiles
+  -- plan_id UUID NULL on users, no FK
+
 V2__create_sites_schema.sql
-V3__create_site_entries_schema.sql        ← includes ltree extension
+  -- sites
+
+V3__create_site_entries_schema.sql
+  -- CREATE EXTENSION IF NOT EXISTS ltree
+  -- site_entries with path LTREE, UNIQUE (site_id, path), indexes
+
 V4__create_draft_published_schema.sql
-V5__create_future_tables.sql              ← site_collaborators, media_assets, site_domains, site_webhooks, plans
-```
+  -- site_drafts, site_published, site_entry_drafts, site_entry_published
+  -- CHECK (jsonb_typeof(content) = 'object') on all four
 
-### Minimum endpoints
-```
-POST /auth/register
-POST /auth/login
-POST /cms/sites
-GET  /cms/sites
-GET  /cms/sites/{id}/draft
-PUT  /cms/sites/{id}/draft            ← If-Match required
-POST /cms/sites/{id}/publish
-POST /cms/sites/{id}/entries
-GET  /cms/sites/{id}/entries
-GET  /cms/sites/{id}/entries/{entryId}/draft
-PUT  /cms/sites/{id}/entries/{entryId}/draft  ← If-Match required
-POST /cms/sites/{id}/entries/{entryId}/publish
-GET  /public/sites/{id}
-GET  /public/sites/{id}/entries
-GET  /public/sites/{id}/entries/{entryId}
+V5__create_future_tables.sql
+  -- site_collaborators (SITE_* roles)
+  -- media_assets, site_domains, site_webhooks, plans
 ```
 
 ---
 
-## 12. Confirmed architecture
+## 14. Deferred decisions
 
-1. **PostgreSQL only** — identity, metadata, content (JSONB), publication state (row existence)
-2. **ltree** for entry hierarchy — acyclic, depth-unlimited, efficient queries
-3. **Hexagonal architecture** with ports for each use case
-4. **Generic content model** — JSONB / `Map<String, Object>`, frontend defines structure
-5. **Multi-user headless CMS** — API serves JSON, each user integrates their own frontend
-6. **Single API** — `/cms`, `/public`, `/auth`; `/admin` reserved
+These are not deferred because they are unimportant — they are deferred because implementing them without real users would be speculative.
+
+| Feature | Trigger to implement |
+|---|---|
+| `content_types` + `content_fields` schema builder | Second client type with different schema needs |
+| Row-Level Security (RLS) | Enterprise client due diligence |
+| i18n | Concrete client request |
+| Preview tokens | Client with static-generated frontend |
+| Webhooks logic | Client with Netlify/Vercel deployment |
+| Custom domains logic | Client request |
+| Media upload logic | Client that cannot use external CDN |
+| `site_collaborators` logic | Per-site team collaboration request |
+| OAuth2 social login | Resolve email-merge edge case first |
+| JWT refresh/revocation | Define strategy (blocklist vs short-lived tokens) |
+| `plans` + `plan_id` FK | Monetization launch |
 
 ---
 
-## 13. Suggested next steps
+## 15. Mock data — full picture
 
-1. `V1__create_users_schema.sql` — full normalized user schema with `plan_id NULL`
-2. Update `UserEntity` — remove `UserDetails` implementation
-3. `V2__create_sites_schema.sql`
-4. `V3__create_site_entries_schema.sql` — ltree extension + indexes
-5. `V4__create_draft_published_schema.sql`
-6. `V5__create_future_tables.sql`
-7. JPA entities for all tables
-8. Domain models: `Site`, `SiteEntry`
-9. Output ports and adapters
-10. Use cases
-11. Controllers: `AuthController`, `CmsSiteController`, `CmsEntryController`, `PublicSiteController`
+A complete snapshot of every table for one user with one portfolio site containing a series with two posts.
+
+### PostgreSQL
+
+**`users`**
+```
+id | email                      | name              | enabled | plan_id | created_at
+1  | santiago@example.com       | Santiago Acevedo  | true    | NULL    | 2026-07-01 09:00:00
+```
+
+**`roles`**
+```
+id | name
+1  | ADMIN
+2  | EDITOR
+```
+
+**`user_roles`**
+```
+user_id | role_id
+1       | 2        -- Santiago is EDITOR
+```
+
+**`user_credentials`**
+```
+user_id | password_hash                                             | created_at          | updated_at
+1       | $2a$12$Kx8Qz1...                                         | 2026-07-01 09:00:00 | 2026-07-01 09:00:00
+```
+
+**`user_profiles`**
+```
+user_id | last_name | phone | bio                              | avatar_url                          | website                    | metadata
+1       | Acevedo   | NULL  | Backend developer, Java & Spring | https://cdn.example.com/avatar.jpg  | https://santiago.dev       | {"github":"https://github.com/santiago","linkedin":"https://linkedin.com/in/santiago","timezone":"America/Bogota"}
+```
+
+---
+
+**`sites`**
+```
+id                                   | owner_user_id | title             | summary                    | content_schema  | created_at          | updated_at
+b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a | 1             | Santiago Acevedo  | Backend Developer Portfolio | portfolio-v1   | 2026-07-01 10:00:00 | 2026-07-15 14:00:00
+```
+
+---
+
+**`site_entries`** — one series + two posts
+```
+id                                   | site_id      | path                                                                                           | type   | sort_order | created_at
+c1111111-0000-0000-0000-000000000001 | b7fd3b44-... | root.c1111111_0000_0000_0000_000000000001                                                      | series | 1          | 2026-07-02
+c2222222-0000-0000-0000-000000000002 | b7fd3b44-... | root.c1111111_0000_0000_0000_000000000001.c2222222_0000_0000_0000_000000000002                 | post   | 1          | 2026-07-03
+c3333333-0000-0000-0000-000000000003 | b7fd3b44-... | root.c1111111_0000_0000_0000_000000000001.c2222222_0000_0000_0000_000000000002.c3333333_...    | post   | 2          | 2026-07-10
+```
+
+Note: path segments are UUIDs with `-` replaced by `_`.
+
+---
+
+**`site_drafts`**
+```
+site_id      | version | content (JSONB)                                                    | updated_at
+b7fd3b44-... | 5       | {"seo":{...},"hero":{...},"skills":[...],"jobs":[...],"projects":[...]} | 2026-07-15 14:00:00
+```
+
+**`site_published`**
+```
+site_id      | content (JSONB)                                                    | published_at
+b7fd3b44-... | {"seo":{...},"hero":{...},"skills":[...],"jobs":[...],"projects":[...]} | 2026-07-15 14:05:00
+```
+
+---
+
+**`site_entry_drafts`**
+```
+entry_id     | site_id      | version | content (JSONB)                                                         | updated_at
+c1111111-... | b7fd3b44-... | 2       | {"title":"Hexagonal Architecture Series","description":"A 3-part..."}   | 2026-07-02 11:00:00
+c2222222-... | b7fd3b44-... | 3       | {"title":"Part 1: Domain Layer","date":"2026-07-03","body":"# Domain..."} | 2026-07-10 09:00:00
+c3333333-... | b7fd3b44-... | 1       | {"title":"Part 2: Application Layer","date":"2026-07-10","body":"..."}   | 2026-07-10 10:00:00
+```
+
+**`site_entry_published`**
+```
+entry_id     | site_id      | content (JSONB)                                                         | published_at
+c1111111-... | b7fd3b44-... | {"title":"Hexagonal Architecture Series","description":"A 3-part..."}   | 2026-07-02 12:00:00
+c2222222-... | b7fd3b44-... | {"title":"Part 1: Domain Layer","date":"2026-07-03","body":"# Domain..."} | 2026-07-10 09:30:00
+-- c3333333 not published yet — no row exists
+```
+
+---
+
+### JSONB content expanded
+
+**`site_published.content`** — full portfolio
+```json
+{
+  "seo": {
+    "title": "Santiago Acevedo | Backend Developer",
+    "description": "Java, Spring Boot, hexagonal architecture",
+    "ogImage": "https://cdn.example.com/og.png"
+  },
+  "hero": {
+    "greeting": "Hi, I'm",
+    "name": "Santiago Acevedo",
+    "tagline": "Backend developer building APIs and scalable systems.",
+    "ctaLabel": "View projects",
+    "ctaUrl": "/projects"
+  },
+  "skills": [
+    { "name": "Java",        "slug": "openjdk",     "category": "BACKEND" },
+    { "name": "Spring Boot", "slug": "spring",      "category": "BACKEND" },
+    { "name": "PostgreSQL",  "slug": "postgresql",  "category": "BACKEND" },
+    { "name": "Docker",      "slug": "docker",      "category": "CLOUD_DEVOPS" }
+  ],
+  "jobs": [
+    {
+      "company":    "Acme Corp",
+      "role":       "Backend Developer",
+      "period":     "2023 — Present",
+      "location":   "Remote",
+      "highlights": [
+        "Built resilient REST APIs serving 50k req/day",
+        "Reduced average response time by 40% via query optimization",
+        "Led migration from monolith to hexagonal architecture"
+      ],
+      "tech": ["Java", "Spring Boot", "PostgreSQL", "Docker"]
+    }
+  ],
+  "projects": [
+    {
+      "name":        "Event Stream Engine",
+      "description": "Domain event processing engine with guaranteed delivery.",
+      "tech":        ["Java", "Kafka", "Docker"],
+      "github":      "https://github.com/santiago/event-stream-engine",
+      "live":        null
+    }
+  ]
+}
+```
+
+**`site_entry_published.content`** — series index (c1111111)
+```json
+{
+  "title":       "Hexagonal Architecture Series",
+  "description": "A 3-part series on building clean Java backends.",
+  "banner":      "https://cdn.example.com/series-banner.png",
+  "tags":        ["architecture", "java", "spring"]
+}
+```
+
+**`site_entry_published.content`** — part 1 (c2222222)
+```json
+{
+  "title":    "Part 1: The Domain Layer",
+  "date":     "2026-07-03",
+  "body":     "# The Domain Layer\n\nThe domain layer contains your business logic...",
+  "excerpt":  "What belongs in domain, what doesn't, and why it matters.",
+  "tags":     ["architecture", "java", "hexagonal"],
+  "readTime": "6 min read",
+  "banner":   "https://cdn.example.com/part1-banner.png"
+}
+```
+
+**`site_entry_drafts.content`** — part 2, not yet published (c3333333)
+```json
+{
+  "title":    "Part 2: The Application Layer",
+  "date":     "2026-07-10",
+  "body":     "# The Application Layer\n\nThis is still a draft...",
+  "excerpt":  "Use cases, orchestration, and keeping the domain clean.",
+  "tags":     ["architecture", "java", "hexagonal"],
+  "readTime": "7 min read"
+}
+```
+
+---
+
+### What the public API returns
+
+**`GET /public/sites/b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a`**
+```json
+{
+  "id":            "b7fd3b44-66e6-4cb0-9d76-1f6239a11d5a",
+  "title":         "Santiago Acevedo",
+  "summary":       "Backend Developer Portfolio",
+  "contentSchema": "portfolio-v1",
+  "content": {
+    "seo":      { "title": "Santiago Acevedo | Backend Developer", "..." : "..." },
+    "hero":     { "greeting": "Hi, I'm", "name": "Santiago Acevedo", "..." : "..." },
+    "skills":   [ "..." ],
+    "jobs":     [ "..." ],
+    "projects": [ "..." ]
+  },
+  "publishedAt": "2026-07-15T14:05:00Z"
+}
+```
+
+**`GET /public/sites/b7fd3b44-.../entries?parentId=c1111111-...`**
+```json
+[
+  {
+    "id":   "c2222222-0000-0000-0000-000000000002",
+    "type": "post",
+    "sortOrder": 1,
+    "content": {
+      "title":    "Part 1: The Domain Layer",
+      "date":     "2026-07-03",
+      "excerpt":  "What belongs in domain, what doesn't, and why it matters.",
+      "tags":     ["architecture", "java", "hexagonal"],
+      "readTime": "6 min read",
+      "banner":   "https://cdn.example.com/part1-banner.png"
+    },
+    "publishedAt": "2026-07-10T09:30:00Z"
+  }
+  -- c3333333 not returned — no site_entry_published row exists
+]
+```
+
+---
+
+## 16. Testing strategy
+
+### Philosophy
+
+Four layers, each with a distinct purpose. Never use a heavier tool than needed.
+
+| Layer | Tool | Spring context | DB | Speed |
+|---|---|---|---|---|
+| Unit | JUnit 5 + Mockito | None | None | Fast (ms) |
+| Integration | `@SpringBootTest` + Testcontainers | Full | Real PostgreSQL container | Medium (s) |
+| Web slice | `@WebMvcTest` + MockMvc | Web layer only | None (mocked) | Fast |
+| JPA slice | `@DataJpaTest` + Testcontainers | JPA layer only | Real PostgreSQL container | Medium |
+
+---
+
+### Unit tests
+
+Test domain logic and use cases in isolation. No Spring, no DB, no I/O.
+
+```java
+@ExtendWith(MockitoExtension.class)
+class PublishSiteServiceTest {
+
+    @Mock SiteRepository siteRepo;
+    @Mock SiteDraftRepository draftRepo;
+    @Mock SitePublishedRepository publishedRepo;
+
+    @InjectMocks PublishSiteService service;
+
+    @Test
+    void shouldPublishDraft() { ... }
+
+    @Test
+    void shouldThrowWhenSiteNotFound() { ... }
+}
+```
+
+These cover: use case logic, domain rules, error conditions, ownership validation.
+
+---
+
+### Integration tests — Testcontainers
+
+Full Spring context + real PostgreSQL in a Docker container. Works identically locally and in CI — no external DB required.
+
+```java
+@SpringBootTest
+@ActiveProfiles("test")
+@Testcontainers
+@Transactional  // automatic rollback after each test — DB is clean for every @Test
+class SiteRepositoryIntegrationTest {
+
+    @Container
+    static PostgreSQLContainer<?> postgres =
+        new PostgreSQLContainer<>("postgres:16")
+            .withDatabaseName("cms_test")
+            .withUsername("test")
+            .withPassword("test");
+
+    @DynamicPropertySource
+    static void configureDataSource(DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", postgres::getJdbcUrl);
+        registry.add("spring.datasource.username", postgres::getUsername);
+        registry.add("spring.datasource.password", postgres::getPassword);
+    }
+}
+```
+
+`@Transactional` on the test class rolls back every `@Test` automatically — no manual data cleanup needed.
+
+These cover: repository queries, ltree path operations, JSONB CHECK constraints, cascade deletes, optimistic locking conflicts.
+
+---
+
+### Web slice tests
+
+Test controllers and HTTP contracts without loading the full context. Use MockMvc to assert status codes, response shapes, and error envelopes.
+
+```java
+@WebMvcTest(CmsSiteController.class)
+@ActiveProfiles("test")
+class CmsSiteControllerTest {
+
+    @Autowired MockMvc mockMvc;
+    @MockBean CreateSiteUseCase createSiteUseCase;
+
+    @Test
+    void shouldReturn201WhenSiteCreated() throws Exception {
+        mockMvc.perform(post("/cms/sites")
+                .header("Authorization", "Bearer " + validToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""{"title":"My Site"}"""))
+            .andExpect(status().isCreated());
+    }
+}
+```
+
+These cover: HTTP status codes, request validation (422), auth enforcement (401/403), error envelope shape, If-Match / 412 behavior.
+
+---
+
+### JPA slice tests
+
+Test repository queries and SQL in isolation without loading the web layer.
+
+```java
+@DataJpaTest
+@ActiveProfiles("test")
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Testcontainers
+class SiteEntryRepositoryTest {
+
+    @Container
+    static PostgreSQLContainer<?> postgres = ...;
+
+    @DynamicPropertySource
+    static void configureDataSource(...) { ... }
+
+    @Test
+    void shouldFindDirectChildrenByLtreePath() { ... }
+}
+```
+
+`@AutoConfigureTestDatabase(replace = NONE)` prevents Spring from replacing the datasource with an in-memory H2 — we want real PostgreSQL to test ltree queries.
+
+These cover: ltree path queries, custom `@Query` methods, index usage, JSONB constraints.
+
+---
+
+### Required dependencies (to add in M6)
+
+```xml
+<!-- Testcontainers -->
+<dependency>
+    <groupId>org.testcontainers</groupId>
+    <artifactId>junit-jupiter</artifactId>
+    <scope>test</scope>
+</dependency>
+<dependency>
+    <groupId>org.testcontainers</groupId>
+    <artifactId>postgresql</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+Testcontainers requires Docker running locally and in CI.
+
+---
+
+### Profile and DB conventions for tests
+
+- All test classes use `@ActiveProfiles("test")` as a safety net
+- `mvn test` always activates the `test` profile via `maven-surefire-plugin` — no manual switching needed
+- Integration tests use Testcontainers — they do not depend on `cms_db_test` being pre-created
+- `application-test.properties` keeps `ddl-auto: create-drop` as fallback for slice tests that don't use Testcontainers

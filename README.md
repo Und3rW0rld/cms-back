@@ -1,83 +1,90 @@
 # cms-back
 
-Backend API for a CMS (Content Management System) built with Java 21 and Spring Boot 3.5, following **Hexagonal Architecture**.
+Multi-user headless CMS API — Java 26, Spring Boot 3.5, Hexagonal Architecture.
+
+Users manage content through a CMS UI; their own frontends (portfolio, blog, product page, etc.) consume the public API. The API serves JSON only.
 
 ## Stack
 
 | Layer | Technology |
-|-------|-----------|
-| Framework | Spring Boot 3.5.0 |
-| Language | Java 21 |
-| SQL Database | PostgreSQL + Spring Data JPA |
-| NoSQL Database | MongoDB + Spring Data MongoDB |
-| Authentication | Spring Security + JWT (jjwt 0.12.6) |
-| DB Migrations | Flyway |
+|---|---|
+| Framework | Spring Boot 4.0.0 |
+| Language | Java 26 |
+| Database | PostgreSQL 16 + Spring Data JPA |
+| Migrations | Flyway |
+| Hierarchy | PostgreSQL `ltree` extension |
+| Auth | Spring Security + JWT (jjwt 0.12.6) |
 | API Docs | SpringDoc OpenAPI / Swagger UI |
 | Utilities | Lombok, Bean Validation |
 
-## Project Structure
+## Architecture
 
-Follows **Ports & Adapters** (Hexagonal Architecture).
+Hexagonal (Ports & Adapters). Full design spec: [`docs/portfolio-cms-architecture.md`](docs/portfolio-cms-architecture.md)
 
 ```
 src/main/java/com/cms/
-├── CmsBackApplication.java
-├── adapters/
-│   ├── config/              # Spring beans: Security, OpenAPI, etc.
-│   ├── in/
-│   │   ├── web/
-│   │   │   ├── controller/  # REST controllers (driving adapters)
-│   │   │   └── dto/         # Request / response DTOs
-│   │   └── security/jwt/    # JWT filter and provider
-│   └── out/
-│       └── persistence/
-│           ├── jpa/         # PostgreSQL entities and repositories
-│           └── mongo/       # MongoDB documents and repositories
 ├── domain/
-│   ├── model/               # Domain models
+│   ├── model/          # Domain models (Site, SiteEntry, User)
 │   └── port/
-│       ├── in/              # Input ports (use case interfaces)
-│       └── out/             # Output ports (repository interfaces)
-└── application/
-    ├── usecase/             # Use case implementations
-    └── service/             # Domain services
+│       ├── in/         # Input ports (use case interfaces)
+│       └── out/        # Output ports (repository interfaces)
+├── application/
+│   └── usecase/        # Use case implementations
+└── adapters/
+    ├── config/         # Spring beans: Security, OpenAPI
+    ├── in/web/
+    │   ├── controller/ # REST controllers
+    │   └── dto/        # Request / response DTOs
+    └── out/persistence/jpa/
+        ├── entity/     # JPA entities
+        ├── repository/ # Spring Data repositories
+        └── adapter/    # Port implementations
 ```
 
-## Portfolio CMS design
+## API surface
 
-For the proposed portfolio-oriented CMS architecture and data model, see:
+| Prefix | Auth | Purpose |
+|---|---|---|
+| `/auth/**` | None | Register, login |
+| `/cms/**` | JWT | User's own sites and entries |
+| `/public/**` | None | Read published content |
+| `/admin/**` | JWT + ADMIN | System operations (reserved) |
 
-- [`docs/portfolio-cms-architecture.md`](docs/portfolio-cms-architecture.md)
+Base path: `/api` — e.g. `http://localhost:8080/api/cms/sites`
 
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
-- Java 21+
+- Java 26+
 - Maven 3.9+
-- PostgreSQL running on `localhost:5432`
-- MongoDB running on `localhost:27017`
+- PostgreSQL via [Neon](https://neon.tech) (free tier) or any PostgreSQL 16+ instance
 
-### Environment Variables
+### Environment variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DB_USERNAME` | `postgres` | PostgreSQL username |
-| `DB_PASSWORD` | `postgres` | PostgreSQL password |
-| `MONGO_URI` | `mongodb://localhost:27017/cms_content` | MongoDB connection URI |
-| `JWT_SECRET` | *(see application.yml)* | JWT signing secret (min 32 chars) |
+Create a `.env` file at the project root (never committed):
+
+```
+DB_URL=jdbc:postgresql://<host>/neondb?sslmode=require
+DB_USERNAME=<username>
+DB_PASSWORD=<password>
+JWT_SECRET=<min-32-chars>
+```
 
 ### Run
 
-```bash
+Load the `.env` variables and start:
+
+```powershell
+# PowerShell
+Get-Content .env | Where-Object { $_ -notmatch '^#' -and $_ -ne '' } | ForEach-Object {
+    $key, $value = $_ -split '=', 2
+    [System.Environment]::SetEnvironmentVariable($key, $value, 'Process')
+}
 mvn spring-boot:run
 ```
 
-The API will be available at `http://localhost:8080/api`.
-
-### API Documentation
-
-Swagger UI is available at:
+### API docs
 
 ```
 http://localhost:8080/api/swagger-ui.html
@@ -85,21 +92,42 @@ http://localhost:8080/api/swagger-ui.html
 
 ## Authentication
 
-The API uses stateless JWT authentication.
-
-1. Register or login via `/api/auth/**` (public endpoints)
-2. Include the token in subsequent requests:
+Stateless JWT. All `/cms/**` endpoints require:
 
 ```
 Authorization: Bearer <token>
 ```
 
-## Database Migrations
+Obtain a token via `POST /api/auth/login`.
 
-Flyway runs automatically on startup. Migration scripts are located in:
+## Database migrations
+
+Flyway runs automatically on startup. Migration scripts:
 
 ```
 src/main/resources/db/migration/
 ```
 
-Naming convention: `V{version}__{description}.sql`
+Naming: `V{n}__{description}.sql`
+
+Migration order:
+
+```
+V1  User identity schema
+V2  Sites
+V3  Site entries (ltree)
+V4  Draft and published content tables
+V5  Future tables (collaborators, media, domains, webhooks, plans)
+```
+
+## Content model
+
+All site and entry content is stored as `JSONB`. The backend does not interpret or validate content structure — the CMS UI defines it, the public frontend consumes it.
+
+Publication state is determined by row existence in `site_published` / `site_entry_published` — there is no status column.
+
+## Development notes
+
+- Working directory: `C:\Projects\cms-back` (not OneDrive — git repos should not live inside OneDrive)
+- Config: `application.properties` / `application-{profile}.properties` — no YAML
+- Test profile: `spring.profiles.active=test` — uses `cms_db_test`, Flyway disabled, `ddl-auto: create-drop`
