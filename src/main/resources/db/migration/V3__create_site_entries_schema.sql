@@ -16,8 +16,8 @@ CREATE TABLE IF NOT EXISTS site_entries (
     path      LTREE       NOT NULL,                      -- e.g., "root.seriesId.entryId"
     type      VARCHAR(50) NOT NULL,                      -- "post", "project", "series" (not validated)
     sort_order INT        NULL,                          -- optional sort order within parent
-    created_at TIMESTAMP  NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP  NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (site_id, path)                               -- Ensure unique paths within a site
 );
 
@@ -29,7 +29,9 @@ CREATE TABLE IF NOT EXISTS site_entries (
 -- GiST index for ltree operators (<@, @>, etc.)
 CREATE INDEX idx_site_entries_path_gist ON site_entries USING GIST (path);
 
--- B-tree indexes for common queries
-CREATE INDEX idx_site_entries_site_path ON site_entries (site_id, path);
+-- UNIQUE constraint on (site_id, path) automatically creates a btree index
+-- No need for explicit idx_site_entries_site_path
+
+-- B-tree index for type queries
 CREATE INDEX idx_site_entries_site_type ON site_entries (site_id, type);
 CREATE INDEX idx_site_entries_created_at ON site_entries (created_at DESC);

@@ -3,6 +3,11 @@
 -- Normalized tables following domain design
 
 -- ============================================================
+-- pgcrypto extension — required for gen_random_uuid()
+-- ============================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- ============================================================
 -- Roles table — reference data
 -- ============================================================
 CREATE TABLE IF NOT EXISTS roles (
@@ -24,11 +29,13 @@ CREATE TABLE IF NOT EXISTS users (
     name       VARCHAR(100) NOT NULL,
     enabled    BOOLEAN      NOT NULL DEFAULT TRUE,
     plan_id    UUID         NULL,                      -- FK to plans (future monetization)
-    created_at TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_users_email ON users (email);
+-- UNIQUE constraint on email automatically creates a btree index
+-- No need for explicit idx_users_email
+
 CREATE INDEX idx_users_plan_id ON users (plan_id);
 
 -- ============================================================
@@ -48,8 +55,8 @@ CREATE INDEX idx_user_roles_role_id ON user_roles (role_id);
 CREATE TABLE IF NOT EXISTS user_credentials (
     user_id       BIGINT PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
     password_hash VARCHAR(255) NOT NULL,
-    created_at    TIMESTAMP    NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMP    NOT NULL DEFAULT NOW()
+    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================
@@ -60,7 +67,7 @@ CREATE TABLE IF NOT EXISTS user_oauth_providers (
     user_id          BIGINT      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     provider         VARCHAR(30) NOT NULL,              -- GOOGLE, GITHUB
     provider_user_id VARCHAR(255) NOT NULL,
-    created_at       TIMESTAMP    NOT NULL DEFAULT NOW(),
+    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     UNIQUE (provider, provider_user_id)
 );
 
@@ -77,5 +84,5 @@ CREATE TABLE IF NOT EXISTS user_profiles (
     avatar_url VARCHAR(500) NULL,
     website   VARCHAR(255) NULL,
     metadata  JSONB        NOT NULL DEFAULT '{}',
-    updated_at TIMESTAMP   NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
