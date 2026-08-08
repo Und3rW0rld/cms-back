@@ -1,5 +1,6 @@
 package com.cms.adapters.in.security.jwt;
 
+import com.cms.adapters.config.SecurityConstants;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -22,9 +23,6 @@ import java.io.IOException;
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
-    private static final String BEARER_PREFIX = "Bearer ";
-    private static final String AUTH_HEADER = "Authorization";
-
     private final JwtProvider jwtProvider;
     private final UserDetailsService userDetailsService;
 
@@ -35,14 +33,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
 
-        final String authHeader = request.getHeader(AUTH_HEADER);
+        final String authHeader = request.getHeader(SecurityConstants.AUTH_HEADER);
 
-        if (authHeader == null || !authHeader.startsWith(BEARER_PREFIX)) {
+        if (authHeader == null || !authHeader.startsWith(SecurityConstants.BEARER_PREFIX)) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        final String jwt = authHeader.substring(BEARER_PREFIX.length());
+        final String jwt = authHeader.substring(SecurityConstants.BEARER_PREFIX.length());
         final String username;
 
         try {
