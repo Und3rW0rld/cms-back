@@ -31,7 +31,7 @@ import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWrite
 public class SecurityConfig {
 
     private static final String[] PUBLIC_ENDPOINTS = {
-            "/auth/**",
+            SecurityConstants.AUTH_ENDPOINT,
             "/v3/api-docs/**",
             "/swagger-ui/**",
             "/swagger-ui.html"

@@ -11,8 +11,6 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class OpenApiConfig {
 
-    private static final String SECURITY_SCHEME_NAME = "bearerAuth";
-
     @Bean
     public OpenAPI openAPI() {
         return new OpenAPI()
@@ -20,13 +18,13 @@ public class OpenApiConfig {
                         .title("CMS Backend API")
                         .description("REST API for CMS - Content Management System")
                         .version("v1.0.0"))
-                .addSecurityItem(new SecurityRequirement().addList(SECURITY_SCHEME_NAME))
+                .addSecurityItem(new SecurityRequirement().addList(SecurityConstants.SECURITY_SCHEME_NAME))
                 .components(new Components()
-                        .addSecuritySchemes(SECURITY_SCHEME_NAME,
+                        .addSecuritySchemes(SecurityConstants.SECURITY_SCHEME_NAME,
                                 new SecurityScheme()
-                                        .name(SECURITY_SCHEME_NAME)
+                                        .name(SecurityConstants.SECURITY_SCHEME_NAME)
                                         .type(SecurityScheme.Type.HTTP)
-                                        .scheme("bearer")
-                                        .bearerFormat("JWT")));
+                                        .scheme(SecurityConstants.BEARER_SCHEME)
+                                        .bearerFormat(SecurityConstants.JWT_FORMAT)));
     }
 }
