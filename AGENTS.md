@@ -144,6 +144,22 @@ There is **no `status` column**. A site or entry is published if and only if its
 - Never accept `PUT .../draft` without `If-Match`.
 - Applies to both `site_drafts` and `site_entry_drafts`.
 
+### Draft save strategy (MVP vs Future)
+
+**MVP (v1):** User-initiated saves only.
+- Frontend: explicit "Save" button on the editor.
+- Additional: auto-save on blur (when user leaves editor) to prevent accidental loss.
+- Write frequency: 0–10 per user per session (only manual saves, no keystroke tracking).
+- DB load: minimal (~1 UPDATE per user per editing session).
+- Scalability: single-instance deployments only.
+
+**Future (v2+):** Auto-save with keystroke batching (when scaling or real-time collaboration needed).
+- Option A (simple): batch in-memory 30s, flush to PostgreSQL once per 30s.
+- Option B (scalable): Redis cache for instant keystrokes, periodic flush to PostgreSQL (separate instance).
+- Option C (robust): event sourcing — immutable log of changes, compacted hourly for recovery and auditing.
+
+MVP approach is sufficient: user saves explicitly with button, or implicitly on blur. Defers the complexity of high-frequency writes until you have real users.
+
 ### ltree path segments
 - ltree only accepts `[A-Za-z0-9_]` — UUIDs have hyphens and must be converted.
 - Build segment: `entryId.toString().replace('-', '_')`

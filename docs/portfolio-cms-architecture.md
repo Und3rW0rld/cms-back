@@ -270,9 +270,23 @@ COMMIT;
 
 Deletes the `*_published` row. Public endpoint returns `404` until next publish.
 
-### Autoguardado
+### Save strategy (MVP vs Future)
 
-Frontend concern — calls `PUT .../draft` on a timer. Backend has no special logic for it.
+**MVP (v1):** User-initiated saves only.
+- Frontend: explicit "Save" button on the editor
+- Additional: auto-save on blur (leaving the editor) to prevent accidental loss
+- Backend: `PUT .../draft` always succeeds if `If-Match` is valid
+- Write frequency: 0-10 per user per session (manual saves only, no keystrokes)
+- DB load: minimal
+- Scalability: works for single-instance deployments
+
+**Future (v2+):** Auto-save optimization (when scaling or real-time collaboration needed).
+- Batching: accumulate changes in memory, flush every 30 seconds
+- Redis cache layer: keystrokes → Redis immediately, periodic flush to PostgreSQL
+- Event sourcing: immutable log of changes, compacted hourly
+- Message queue: async flush job, decouples writes from user request
+
+For MVP, user-initiated save with blur fallback is sufficient and keeps the architecture simple.
 
 ### PATCH metadata
 
