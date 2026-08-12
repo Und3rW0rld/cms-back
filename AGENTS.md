@@ -23,19 +23,30 @@ src/main/java/com/cms/
 ├── CmsBackApplication.java
 └── adapters/
     ├── config/
-    │   ├── ApplicationConfig.java      # UserDetailsService wiring
+    │   ├── ApplicationConfig.java      # UserDetailsService — loads UserJpaEntity + credentials + roles
     │   ├── OpenApiConfig.java          # Springdoc + Bearer JWT
     │   └── SecurityConfig.java         # Stateless JWT, BCrypt
-    └── in/security/jwt/
-    │   ├── JwtAuthenticationFilter.java
-    │   └── JwtProvider.java             # jjwt 0.12.x
+    └── in/security/
+    │   ├── CmsUserDetails.java          # Spring Security principal — the ONLY UserDetails implementor
+    │   └── jwt/
+    │       ├── JwtAuthenticationFilter.java
+    │       └── JwtProvider.java             # jjwt 0.12.x
     └── out/persistence/jpa/
-        ├── entity/UserEntity.java       # to be refactored — implements UserDetails directly
-        └── repository/UserJpaRepository.java
+        ├── entity/
+        │   ├── UserJpaEntity.java            # users table — pure persistence, no UserDetails
+        │   ├── RoleJpaEntity.java            # roles table
+        │   ├── UserRoleJpaEntity.java        # user_roles join table (composite key)
+        │   ├── UserCredentialJpaEntity.java  # user_credentials table (password_hash)
+        │   ├── UserOAuthProviderJpaEntity.java
+        │   └── UserProfileJpaEntity.java     # user_profiles table (JSONB metadata)
+        └── repository/
+            ├── UserJpaRepository.java
+            ├── UserCredentialJpaRepository.java
+            ├── UserRoleJpaRepository.java
+            └── RoleJpaRepository.java
 ```
 
-**Pending before first feature implementation:**
-- Rewrite `UserEntity` — remove `UserDetails` implementation from the JPA entity (issue #10)
+**Issue #10 done:** `UserEntity` (which implemented `UserDetails` directly) was replaced by normalized JPA entities + `CmsUserDetails` as the sole Spring Security principal.
 
 ---
 
