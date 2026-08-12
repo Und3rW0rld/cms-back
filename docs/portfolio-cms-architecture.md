@@ -77,6 +77,8 @@ user_profiles                                  -- optional enriched data
 - updated_at    TIMESTAMP NOT NULL
 ```
 
+> **Role deprecation (deferred, see §14):** `roles` has no soft-delete column today. `DELETE FROM roles` cascades into `user_roles`, silently stripping the role from every user who had it — no audit trail, and it breaks `POST /auth/register` if the deleted role was the default (`EDITOR`). If a role ever needs to be retired, add `deprecated_at TIMESTAMPTZ NULL` to `roles` and enforce "no new assignments of deprecated roles" in the use case layer — existing holders keep the role. A hard removal (reassign + delete) is a separate, deliberate data migration, never a bare `DELETE`.
+
 ### 3.2 Sites
 
 ```sql
@@ -335,6 +337,8 @@ COMMIT
 **Default role on `POST /auth/register`:** `EDITOR`.
 
 `VIEWER` is not implemented. Per-site collaboration roles (`SITE_EDITOR`, etc.) live in `site_collaborators` and are deferred.
+
+> **Auth error responses (deferred, see §14):** `POST /auth/login` returns a single generic `401 UNAUTHORIZED` for every authentication failure — wrong password, unknown email, and disabled account (`CmsUserDetails.isEnabled() == false`) all produce the same message. Spring Security already distinguishes these internally (`BadCredentialsException` vs `DisabledException`, both `AuthenticationException` subtypes caught by one handler in `GlobalExceptionHandler`) — the generic response is a deliberate OWASP-aligned choice to avoid user enumeration on a public endpoint with no rate limiting yet. Revisit once `/auth/**` has rate limiting (§11) and abuse mitigation in place; a disabled account should then be communicated out-of-band (e.g. notification email), not via a more specific login error.
 
 ---
 
@@ -627,6 +631,8 @@ These are not deferred because they are unimportant — they are deferred becaus
 | OAuth2 social login | Resolve email-merge edge case first |
 | JWT refresh/revocation | Define strategy (blocklist vs short-lived tokens) |
 | `plans` + `plan_id` FK | Monetization launch |
+| Role deprecation (`deprecated_at` on `roles`) | Need to retire a role without breaking existing assignments — see §3.1 |
+| Granular auth error messages (`DisabledException` vs `BadCredentialsException`) | `/auth/**` has rate limiting + abuse mitigation in place — see §11 |
 
 ---
 
