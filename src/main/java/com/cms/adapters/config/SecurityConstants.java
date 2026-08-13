@@ -4,12 +4,9 @@ package com.cms.adapters.config;
  * Security-related constants used across the application.
  * Centralized to avoid magic strings and ensure consistency.
  *
- * Note: Role names (ADMIN, EDITOR, VIEWER) are stored in the {@code roles} table.
- * When converted to GrantedAuthority, they become "ROLE_ADMIN", "ROLE_EDITOR", "ROLE_VIEWER"
- * (as per CmsUserDetails.from(...), which prefixes RoleJpaEntity.name).
- *
- * Use the AUTHORITY_* constants (with ROLE_ prefix) for @PreAuthorize and security checks.
- * Use the ROLE_* constants (bare names) only when mapping to/from the database.
+ * Role names live in {@code com.cms.domain.model.user.Role} (the domain enum) —
+ * this class only holds the Spring Security-specific "ROLE_" prefix convention,
+ * to avoid defining role names in two places.
  */
 public class SecurityConstants {
 
@@ -24,17 +21,8 @@ public class SecurityConstants {
     public static final String JWT_FORMAT = "JWT";
     public static final String SECURITY_SCHEME_NAME = "bearerAuth";
 
-    // Roles — stored as enum names in database
-    public static final String ROLE_ADMIN = "ADMIN";
-    public static final String ROLE_EDITOR = "EDITOR";
-    public static final String ROLE_VIEWER = "VIEWER";
+    // Spring Security authority prefix convention — see com.cms.domain.model.user.Role for role names
     public static final String ROLE_PREFIX = "ROLE_";
-
-    // Granted Authorities — used in @PreAuthorize and security checks
-    // These match the values built by CmsUserDetails.from(...)
-    public static final String AUTHORITY_ADMIN = ROLE_PREFIX + ROLE_ADMIN;      // "ROLE_ADMIN"
-    public static final String AUTHORITY_EDITOR = ROLE_PREFIX + ROLE_EDITOR;    // "ROLE_EDITOR"
-    public static final String AUTHORITY_VIEWER = ROLE_PREFIX + ROLE_VIEWER;    // "ROLE_VIEWER"
 
     // API Paths
     public static final String AUTH_ENDPOINT = "/auth/**";

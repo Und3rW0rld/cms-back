@@ -48,6 +48,25 @@ src/main/java/com/cms/
 
 **Issue #10 done:** `UserEntity` (which implemented `UserDetails` directly) was replaced by normalized JPA entities + `CmsUserDetails` as the sole Spring Security principal.
 
+### MVP roadmap (dependency order)
+
+No domain/application layer or controllers exist yet. Issues #23-#31 build the MVP end-to-end (register → create site → write content → publish → public read), in this order because each depends on the previous:
+
+| # | Scope | Depends on |
+|---|---|---|
+| #23 | User domain model + register/login use cases | #10 (JPA entities) |
+| #24 | AuthController — `POST /auth/register`, `POST /auth/login` | #23 |
+| #25 | Site domain model + persistence adapters | #23 (needs owner_user_id) |
+| #26 | CMS Sites CRUD (create/list/get/patch/delete) | #25 |
+| #27 | Site draft/publish lifecycle — optimistic locking | #26 |
+| #28 | SiteEntry domain model + persistence adapters (ltree) | #25 |
+| #29 | CMS Entries CRUD + draft/publish lifecycle | #28, reuses #27's locking pattern |
+| #30 | Public endpoints — read published sites/entries | #27, #29 |
+| #31 | Caching + rate limiting | #30 — explicitly last, nothing to cache/limit before it |
+| #32 | Role management use case (assign/revoke) | #23. Not MVP-blocking — deferred alongside JWT staleness trade-off, see docs §14 |
+
+Issue #11 (OpenAPI/Swagger polish) is paused — most of its tasks need real controllers to tag/group, which don't exist until #24/#26/#29/#30 land. Revisit once those exist.
+
 ---
 
 ## Commands
@@ -288,4 +307,10 @@ Testcontainers requires Docker running. Dependencies added in M6 milestone.
 - Base path: `/api`
 - Swagger UI: `http://localhost:8080/api/swagger-ui.html`
 - API docs: `http://localhost:8080/api/v3/api-docs`
-- Auth header: `Authorization: Bearer <token>`
+- Auth header: `Authorization: Bearer {token}`
+
+### Endpoint documentation
+
+`docs/endpoints/` is the source of truth for HTTP contracts (request/response shapes, error cases) — one file per group (`auth.md`, `cms-sites.md`, etc.), matching the OpenAPI tags in `SecurityConstants.TAG_*`. Code comments explain *why* (architecture decisions); `docs/endpoints/` explains *what* the API does from a caller's perspective. Update the matching file whenever a controller changes its contract.
+
+`docs/postman/cms-back.postman_collection.json` mirrors `docs/endpoints/` — importable, uses `{{baseUrl}}` and an auto-populated `{{accessToken}}` collection variable (set by login/register's post-response script). Update it alongside the docs.

@@ -629,10 +629,19 @@ These are not deferred because they are unimportant — they are deferred becaus
 | Media upload logic | Client that cannot use external CDN |
 | `site_collaborators` logic | Per-site team collaboration request |
 | OAuth2 social login | Resolve email-merge edge case first |
-| JWT refresh/revocation | Define strategy (blocklist vs short-lived tokens) |
+| JWT refresh/revocation | Define strategy (blocklist vs short-lived tokens). Partial scaffolding already exists and is unused: `JwtProvider.generateRefreshToken()` + `jwt.refresh-expiration` property — nothing calls either today. Wire them up (or remove them) once the strategy is decided, don't leave them as dead code. |
 | `plans` + `plan_id` FK | Monetization launch |
 | Role deprecation (`deprecated_at` on `roles`) | Need to retire a role without breaking existing assignments — see §3.1 |
 | Granular auth error messages (`DisabledException` vs `BadCredentialsException`) | `/auth/**` has rate limiting + abuse mitigation in place — see §11 |
+| Role management use case (assign/revoke roles after registration) | Tracked as issue #32. Today `assignRole` is only ever called once, from registration — there's no way to change a user's roles afterward, and `/admin/**` is still unimplemented (§6.4). This is also *why* embedding roles in the JWT (below) is safe today: no code path can make them stale. |
+
+### JWT claims — userId + roles embedded, no DB round-trip per request
+
+Decided during #23: `JwtProvider.generateToken` takes `Map<String, Object> extraClaims`; `JwtTokenIssuer` populates `userId` and `roles` (as `ROLE_*` authority strings) from the freshly-loaded `CmsUserDetails` at login/register time. `JwtAuthenticationFilter` reads those claims back and builds `CmsUserDetails` directly — no `UserDetailsService`/DB call on authenticated requests.
+
+**Rationale:** DB is a paid, metered service (Neon) — avoiding 3 queries (user + credentials + roles) per request has real cost impact. Accepted trade-off: if a user's roles are ever revoked, their current token keeps the old roles until it expires (`jwt.expiration`, 24h) or they log in again. This is acceptable *only* because no role management use case exists yet (see row above) — revisit this trade-off when one is built, since that's the moment staleness becomes real instead of theoretical.
+
+`isEnabled()` is not re-checked per request either, for the same reason — a disabled account keeps working until its token expires.
 
 ---
 
