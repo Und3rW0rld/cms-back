@@ -17,15 +17,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Optional;
 
-/**
- * Builds CmsUserDetails directly from the JWT's userId + roles claims —
- * no DB round-trip per request. Safe because the token is signed (can't be
- * forged) and roles never change after registration today (no role
- * management use case exists — see docs §14). isEnabled() is not re-checked
- * here; a disabled account keeps working until its token expires. Revisit
- * once role/account management exists.
- */
 @Slf4j
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -54,28 +47,39 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         try {
             if (SecurityContextHolder.getContext().getAuthentication() == null) {
-                String username = jwtProvider.extractUsername(jwt);
-                Long userId = jwtProvider.extractUserId(jwt);
-                List<String> roleAuthorities = jwtProvider.extractRoles(jwt);
-
-                List<GrantedAuthority> authorities = roleAuthorities.stream()
-                        .<GrantedAuthority>map(SimpleGrantedAuthority::new)
-                        .toList();
-
-                CmsUserDetails userDetails = new CmsUserDetails(userId, username, null, true, authorities);
-
-                if (jwtProvider.isTokenValid(jwt, userDetails)) {
-                    UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-                            userDetails, null, authorities
-                    );
-                    authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-                    SecurityContextHolder.getContext().setAuthentication(authToken);
-                }
+                buildUserDetails(jwt)
+                        .filter(userDetails -> jwtProvider.isTokenValid(jwt, userDetails))
+                        .ifPresent(userDetails -> authenticate(userDetails, request));
             }
         } catch (Exception e) {
             log.warn("Could not authenticate from JWT: {}", e.getMessage());
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    private Optional<CmsUserDetails> buildUserDetails(String jwt) {
+        String username = jwtProvider.extractUsername(jwt);
+        Long userId = jwtProvider.extractUserId(jwt);
+        List<String> roleAuthorities = jwtProvider.extractRoles(jwt);
+
+        if (username == null || userId == null || roleAuthorities == null) {
+            log.warn("JWT missing required claims (userId/roles) — rejecting");
+            return Optional.empty();
+        }
+
+        List<GrantedAuthority> authorities = roleAuthorities.stream()
+                .<GrantedAuthority>map(SimpleGrantedAuthority::new)
+                .toList();
+
+        return Optional.of(new CmsUserDetails(userId, username, null, true, authorities));
+    }
+
+    private void authenticate(CmsUserDetails userDetails, HttpServletRequest request) {
+        UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
+                userDetails, null, userDetails.getAuthorities()
+        );
+        authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+        SecurityContextHolder.getContext().setAuthentication(authToken);
     }
 }
