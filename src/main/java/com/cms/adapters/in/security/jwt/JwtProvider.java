@@ -12,13 +12,16 @@ import org.springframework.stereotype.Component;
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
 @Slf4j
 @Component
 public class JwtProvider {
+
+    public static final String CLAIM_USER_ID = "userId";
+    public static final String CLAIM_ROLES = "roles";
 
     @Value("${jwt.secret}")
     private String secret;
@@ -29,14 +32,12 @@ public class JwtProvider {
     @Value("${jwt.refresh-expiration}")
     private long refreshExpiration;
 
-    // ---- Token generation ----
-
-    public String generateToken(UserDetails userDetails) {
-        return buildToken(new HashMap<>(), userDetails, expiration);
+    public String generateToken(UserDetails userDetails, Map<String, Object> extraClaims) {
+        return buildToken(extraClaims, userDetails, expiration);
     }
 
     public String generateRefreshToken(UserDetails userDetails) {
-        return buildToken(new HashMap<>(), userDetails, refreshExpiration);
+        return buildToken(Map.of(), userDetails, refreshExpiration);
     }
 
     private String buildToken(Map<String, Object> extraClaims, UserDetails userDetails, long ttl) {
@@ -48,8 +49,6 @@ public class JwtProvider {
                 .signWith(getSigningKey())
                 .compact();
     }
-
-    // ---- Token validation ----
 
     public boolean isTokenValid(String token, UserDetails userDetails) {
         try {
@@ -65,10 +64,17 @@ public class JwtProvider {
         return extractExpiration(token).before(new Date());
     }
 
-    // ---- Claims extraction ----
-
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
+    }
+
+    public Long extractUserId(String token) {
+        return extractClaim(token, claims -> claims.get(CLAIM_USER_ID, Long.class));
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<String> extractRoles(String token) {
+        return extractClaim(token, claims -> (List<String>) claims.get(CLAIM_ROLES, List.class));
     }
 
     private Date extractExpiration(String token) {
