@@ -3,6 +3,7 @@ package com.cms.application.usecase.user;
 import com.cms.domain.exception.EmailAlreadyExistsException;
 import com.cms.domain.model.user.Role;
 import com.cms.domain.model.user.User;
+import com.cms.domain.port.in.user.RegisterUserCommand;
 import com.cms.domain.port.out.CredentialRepository;
 import com.cms.domain.port.out.RoleRepository;
 import com.cms.domain.port.out.UserRepository;
@@ -57,7 +58,7 @@ class RegisterUserServiceTest {
         User savedWithoutRoles = new User(1L, "new@example.com", "New User", true, Set.of(), now, now);
         when(userRepository.save(any(User.class))).thenReturn(savedWithoutRoles);
 
-        User result = service.register("new@example.com", "plaintext", "New User");
+        User result = service.register(new RegisterUserCommand("new@example.com", "plaintext", "New User"));
 
         assertThat(result.id()).isEqualTo(1L);
         assertThat(result.email()).isEqualTo("new@example.com");
@@ -71,7 +72,7 @@ class RegisterUserServiceTest {
     void shouldRejectDuplicateEmail() {
         when(userRepository.existsByEmail("taken@example.com")).thenReturn(true);
 
-        assertThatThrownBy(() -> service.register("taken@example.com", "plaintext", "Someone"))
+        assertThatThrownBy(() -> service.register(new RegisterUserCommand("taken@example.com", "plaintext", "Someone")))
                 .isInstanceOf(EmailAlreadyExistsException.class)
                 .hasMessageContaining("taken@example.com");
 

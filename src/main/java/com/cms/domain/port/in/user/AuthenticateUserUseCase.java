@@ -4,5 +4,5 @@ import com.cms.domain.model.user.AuthToken;
 
 public interface AuthenticateUserUseCase {
 
-    AuthToken authenticate(String email, String rawPassword);
+    AuthToken authenticate(AuthenticateUserCommand command);
 }
