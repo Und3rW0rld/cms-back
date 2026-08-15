@@ -1,6 +1,7 @@
 package com.cms.application.usecase.user;
 
 import com.cms.domain.model.user.AuthToken;
+import com.cms.domain.port.in.user.AuthenticateUserCommand;
 import com.cms.domain.port.out.CredentialAuthenticator;
 import com.cms.domain.port.out.TokenIssuer;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,7 +42,7 @@ class AuthenticateUserServiceTest {
         AuthToken expected = new AuthToken("jwt-value", 86_400_000L);
         when(tokenIssuer.issueToken("user@example.com")).thenReturn(expected);
 
-        AuthToken result = service.authenticate("user@example.com", "correct-password");
+        AuthToken result = service.authenticate(new AuthenticateUserCommand("user@example.com", "correct-password"));
 
         assertThat(result).isEqualTo(expected);
 
@@ -55,7 +56,7 @@ class AuthenticateUserServiceTest {
         doThrow(new BadCredentialsException("Bad credentials"))
                 .when(credentialAuthenticator).authenticate("user@example.com", "wrong-password");
 
-        assertThatThrownBy(() -> service.authenticate("user@example.com", "wrong-password"))
+        assertThatThrownBy(() -> service.authenticate(new AuthenticateUserCommand("user@example.com", "wrong-password")))
                 .isInstanceOf(BadCredentialsException.class);
 
         verify(tokenIssuer, never()).issueToken(anyString());

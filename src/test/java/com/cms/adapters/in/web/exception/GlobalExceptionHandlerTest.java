@@ -33,7 +33,7 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void shouldReturn404ForNotFoundException() {
-        ResponseEntity<ErrorResponse> response = handler.handleNotFound(
+        ResponseEntity<ErrorResponseDTO> response = handler.handleNotFound(
                 new NotFoundException("Site not found"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
@@ -47,7 +47,7 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void shouldReturn409ForConflictException() {
-        ResponseEntity<ErrorResponse> response = handler.handleConflict(
+        ResponseEntity<ErrorResponseDTO> response = handler.handleConflict(
                 new ConflictException("Entry has children"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
@@ -59,7 +59,7 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void shouldReturn412ForPreconditionFailedException() {
-        ResponseEntity<ErrorResponse> response = handler.handlePreconditionFailed(
+        ResponseEntity<ErrorResponseDTO> response = handler.handlePreconditionFailed(
                 new PreconditionFailedException("Version mismatch"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PRECONDITION_FAILED);
@@ -77,7 +77,7 @@ class GlobalExceptionHandlerTest {
         bindingResult.rejectValue("summary", "Size", "must be at most 255 characters");
         MethodArgumentNotValidException ex = new MethodArgumentNotValidException(null, bindingResult);
 
-        ResponseEntity<ErrorResponse> response = handler.handleValidation(ex);
+        ResponseEntity<ErrorResponseDTO> response = handler.handleValidation(ex);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(response.getBody()).isNotNull();
@@ -86,13 +86,13 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().correlationId()).isEqualTo(TEST_CORRELATION_ID);
         assertThat(response.getBody().fields()).hasSize(2);
         assertThat(response.getBody().fields())
-                .extracting(ErrorResponse.FieldError::field)
+                .extracting(ErrorResponseDTO.FieldError::field)
                 .containsExactlyInAnyOrder("title", "summary");
     }
 
     @Test
     void shouldReturn403ForAccessDeniedException() {
-        ResponseEntity<ErrorResponse> response = handler.handleAccessDenied(
+        ResponseEntity<ErrorResponseDTO> response = handler.handleAccessDenied(
                 new AccessDeniedException("Forbidden"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
@@ -105,20 +105,20 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void shouldReturn401ForAuthenticationException() {
-        ResponseEntity<ErrorResponse> response = handler.handleAuthentication(
+        ResponseEntity<ErrorResponseDTO> response = handler.handleAuthentication(
                 new BadCredentialsException("Bad credentials"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().status()).isEqualTo(401);
         assertThat(response.getBody().error()).isEqualTo("UNAUTHORIZED");
-        assertThat(response.getBody().message()).isEqualTo("Authentication required");
+        assertThat(response.getBody().message()).isEqualTo("Authentication failed");
         assertThat(response.getBody().correlationId()).isEqualTo(TEST_CORRELATION_ID);
     }
 
     @Test
     void shouldReturn500ForGenericException() {
-        ResponseEntity<ErrorResponse> response = handler.handleGeneric(
+        ResponseEntity<ErrorResponseDTO> response = handler.handleGeneric(
                 new RuntimeException("something went wrong internally"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
@@ -131,7 +131,7 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void shouldNotLeakInternalDetailsIn500Response() {
-        ResponseEntity<ErrorResponse> response = handler.handleGeneric(
+        ResponseEntity<ErrorResponseDTO> response = handler.handleGeneric(
                 new RuntimeException("DB connection timeout at host 10.0.0.1:5432"));
 
         assertThat(response.getBody()).isNotNull();
@@ -144,7 +144,7 @@ class GlobalExceptionHandlerTest {
     void shouldIncludeCorrelationIdEvenWhenMdcIsEmpty() {
         MDC.clear();
 
-        ResponseEntity<ErrorResponse> response = handler.handleGeneric(
+        ResponseEntity<ErrorResponseDTO> response = handler.handleGeneric(
                 new RuntimeException("error"));
 
         assertThat(response.getBody()).isNotNull();
@@ -153,7 +153,7 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void shouldReturn413ForContentTooLargeException() {
-        ResponseEntity<ErrorResponse> response = handler.handleContentTooLarge(
+        ResponseEntity<ErrorResponseDTO> response = handler.handleContentTooLarge(
                 new com.cms.domain.shared.ContentTooLargeException("Content exceeds 1MB limit"));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
@@ -166,7 +166,7 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void shouldReturn413ForMaxUploadSizeExceededException() {
-        ResponseEntity<ErrorResponse> response = handler.handleMaxUploadSizeExceeded(
+        ResponseEntity<ErrorResponseDTO> response = handler.handleMaxUploadSizeExceeded(
                 new org.springframework.web.multipart.MaxUploadSizeExceededException(2 * 1024 * 1024));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
