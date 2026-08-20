@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,8 +20,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.logging.Logger;
+
 @RestController
 @RequestMapping("/auth")
+@Slf4j
 @RequiredArgsConstructor
 @Tag(name = SecurityConstants.TAG_AUTH)
 public class AuthController {
@@ -31,6 +35,7 @@ public class AuthController {
     @PostMapping("/register")
     @SecurityRequirements
     public ResponseEntity<AuthResponseDTO> register(@Valid @RequestBody RegisterRequestDTO request) {
+        log.debug("Received registration request for email: {}", request.email());
         RegisterUserCommand registerCommand = request.toCommand();
         registerUserUseCase.register(registerCommand);
 
@@ -41,6 +46,7 @@ public class AuthController {
     @PostMapping("/login")
     @SecurityRequirements
     public ResponseEntity<AuthResponseDTO> login(@Valid @RequestBody LoginRequestDTO request) {
+        log.debug("Received login request for email: {}", request.email());
         AuthToken token = authenticateUserUseCase.authenticate(request.toCommand());
         return ResponseEntity.ok(AuthResponseDTO.from(token));
     }

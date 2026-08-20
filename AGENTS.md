@@ -201,12 +201,19 @@ MVP approach is sufficient: user saves explicitly with button, or implicitly on 
 - `?parentId=root` → `nlevel(path) = 1`
 - `?parentId={uuid}` → resolve parent path, then `path <@ parentPath AND nlevel(path) = nlevel(parentPath) + 1`
 
-### Delete cascade — use case, not DDL
-No `ON DELETE CASCADE` in FK definitions. Use cases explicitly delete in this order:
+### Delete cascade — DB-level `ON DELETE CASCADE` (revised, see architecture docs §4)
+`site_entries`, `site_drafts`, `site_published`, `site_entry_drafts`, `site_entry_published`
+all declare `ON DELETE CASCADE` on their FK (see V3/V4 migrations) — this superseded the
+originally-planned explicit-delete-in-use-case design once no on-delete side effect
+(webhook, media cleanup) existed to justify it. `DeleteSiteUseCase` only calls
+`siteRepository.deleteById(id)` after ownership validation; Postgres cascades the rest atomically.
+**Trigger to revisit:** the moment any on-delete side effect is implemented — migrate back
+to explicit application-level cascade so that side effect has somewhere to run.
 
-**Delete site:** `site_entry_published` → `site_entry_drafts` → `site_entries` → `site_published` → `site_drafts` → `sites`
-
-**Delete entry:** check for children first (`path <@ entryPath AND id != entryId`) → `409` if any exist → else delete `site_entry_published`, `site_entry_drafts`, `site_entries` row.
+**Delete entry (scope: #29):** children-check (`path <@ entryPath AND id != entryId` → `409`
+if any exist) stays application-level — it's a business rule, not row cleanup. The actual
+row removal is `DELETE FROM site_entries WHERE id = ?`; `ON DELETE CASCADE` fans out to
+`site_entry_drafts` and `site_entry_published`.
 
 ### Content rules
 - `content` column: `JSONB NOT NULL` with `CHECK (jsonb_typeof(content) = 'object')` in DB.

@@ -6,7 +6,8 @@
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080/api" },
-    { "key": "accessToken", "value": "" }
+    { "key": "accessToken", "value": "" },
+    { "key": "siteId", "value": "" }
   ],
   "item": [
     {
@@ -73,6 +74,104 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "CMS Sites",
+      "item": [
+        {
+          "name": "Create Site",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Santiago Acevedo — Portfolio\",\n  \"summary\": \"Backend Developer Portfolio\",\n  \"contentSchema\": \"portfolio-v1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cms/sites",
+              "host": ["{{baseUrl}}"],
+              "path": ["cms", "sites"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.collectionVariables.set('siteId', body.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Sites",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/cms/sites",
+              "host": ["{{baseUrl}}"],
+              "path": ["cms", "sites"]
+            }
+          }
+        },
+        {
+          "name": "Get Site by Id",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/cms/sites/{{siteId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["cms", "sites", "{{siteId}}"]
+            }
+          }
+        },
+        {
+          "name": "Patch Site",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"New Title\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cms/sites/{{siteId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["cms", "sites", "{{siteId}}"]
+            }
+          }
+        },
+        {
+          "name": "Delete Site",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/cms/sites/{{siteId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["cms", "sites", "{{siteId}}"]
+            }
+          }
         }
       ]
     }

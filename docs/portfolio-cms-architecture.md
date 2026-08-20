@@ -268,6 +268,11 @@ BEGIN;
 COMMIT;
 ```
 
+> **No publish history / rollback (deferred, see §14):** `ON CONFLICT DO UPDATE` overwrites
+> the previous `site_published.content` with no trace of what was there before. There is
+> currently no way to undo a bad publish except manually reconstructing content from the
+> draft (if still remembered) or from scratch. Same applies to `site_entry_published`.
+
 ### Unpublish
 
 Deletes the `*_published` row. Public endpoint returns `404` until next publish.
@@ -298,32 +303,51 @@ For MVP, user-initiated save with blur fallback is sufficient and keeps the arch
 
 Two simultaneous publish clicks: last one wins. Acceptable for a human action.
 
-### Delete cascade — explicit in use case, not in DDL
+### Delete cascade — DB-level `ON DELETE CASCADE` (revised from the original explicit-in-use-case design)
 
-Cascades are written explicitly in use case code, not as `ON DELETE CASCADE` in DDL. This keeps the intent visible in code and makes it easy to add side effects (webhook calls, media cleanup) later.
+**Current implementation (as of #26):** `site_entries`, `site_drafts`, `site_published`,
+`site_entry_drafts`, and `site_entry_published` all declare `ON DELETE CASCADE` on their
+FK to `sites`/`site_entries` (see V3/V4 migrations). `DeleteSiteUseCase` therefore only
+calls `siteRepository.deleteById(id)` after validating ownership — PostgreSQL cascades
+the other 5 tables in one atomic FK-driven delete, no application-level fan-out needed.
 
-**Delete site:**
+**Why this replaced the originally-planned explicit-delete-in-use-case design:** that
+design's stated rationale was "keeps the intent visible in code and makes it easy to add
+side effects (webhook calls, media cleanup) later" — but no such side effect exists yet
+(see §14 Deferred Decisions: webhooks, media assets are both gated on a real client
+request that hasn't happened). Per `pragmatic-mvp-decisions`, don't build the hook until
+something needs to plug into it. DB cascade is simpler, already migrated (V1-V5 applied),
+and atomic by construction.
+
+**Trigger to revisit:** the moment any on-delete side effect is implemented (webhook
+firing, media file cleanup, cache eviction beyond the simple `@CacheEvict` pattern in
+§11), migrate back to explicit application-level cascade so that side effect has a place
+to run — DB-level `ON DELETE CASCADE` gives the database no hook to call out to
+application code.
+
+**Delete site (current DB-cascade behavior, for reference — not application code):**
 ```
-BEGIN transaction
-  DELETE FROM site_entry_published WHERE site_id = ?
-  DELETE FROM site_entry_drafts    WHERE site_id = ?
-  DELETE FROM site_entries         WHERE site_id = ?
-  DELETE FROM site_published       WHERE site_id = ?
-  DELETE FROM site_drafts          WHERE site_id = ?
-  DELETE FROM sites                WHERE id = ?
-COMMIT
+DELETE FROM sites WHERE id = ?
+-- ON DELETE CASCADE fans out atomically to:
+  site_entry_published  WHERE site_id = ?
+  site_entry_drafts     WHERE site_id = ?
+  site_entries          WHERE site_id = ?
+  site_published        WHERE site_id = ?
+  site_drafts           WHERE site_id = ?
 ```
 
-**Delete entry:**
+**Delete entry (scope: #29 — not yet implemented):**
 ```
 BEGIN transaction
   IF EXISTS (SELECT 1 FROM site_entries WHERE path <@ entry_path AND id != entry_id)
     → return 409 Conflict — delete children first
-  DELETE FROM site_entry_published WHERE entry_id = ?
-  DELETE FROM site_entry_drafts    WHERE entry_id = ?
-  DELETE FROM site_entries         WHERE id = ?
+  DELETE FROM site_entries WHERE id = ?
+  -- ON DELETE CASCADE fans out atomically to site_entry_drafts, site_entry_published
 COMMIT
 ```
+The children-check (409 on non-leaf delete) stays application-level regardless of the
+cascade decision above — it's a business rule, not row cleanup, so DB cascade doesn't
+replace it.
 
 ---
 
@@ -638,6 +662,10 @@ These are not deferred because they are unimportant — they are deferred becaus
 | Role deprecation (`deprecated_at` on `roles`) | Need to retire a role without breaking existing assignments — see §3.1 |
 | Granular auth error messages (`DisabledException` vs `BadCredentialsException`) | `/auth/**` has rate limiting + abuse mitigation in place — see §11 |
 | Role management use case (assign/revoke roles after registration) | Tracked as issue #32. Today `assignRole` is only ever called once, from registration — there's no way to change a user's roles afterward, and `/admin/**` is still unimplemented (§6.4). This is also *why* embedding roles in the JWT (below) is safe today: no code path can make them stale. |
+| Publish history / rollback for `site_published` and `site_entry_published` | A real user reports a bad publish they want to undo, or auditability becomes a compliance requirement. Today `ON CONFLICT DO UPDATE` (see §4, Publish) silently overwrites the previous snapshot with no trace — there is no "undo my last publish" path. Cheapest fix when the trigger hits: an append-only `site_published_history` table (site_id, content, published_at) written alongside every publish, with rollback = copy an old row back into `site_published`. Full event sourcing (already listed as a Future v2+ option for the draft save strategy) is overkill unless full change auditing, not just publish snapshots, is the actual need. |
+| Full-text search over entry content (e.g. a news-site integration searching headlines/body) | A client with real search volume/traffic requests it — today there's no `?q=` on any public endpoint, and none of `sites`/`site_entries`/`*_published` has a search index. `content` is opaque JSONB (AGENTS.md: "Backend never interprets content structure") — search is the one feature that inherently requires interpreting specific fields inside it (e.g. `content->>'title'`, `content->>'body'`), so building this means picking which fields become "special" for indexing purposes. When the trigger hits, the right default is PostgreSQL native full-text search: a generated `tsvector` column over the chosen fields + a GIN index (`CREATE INDEX ... USING GIN (search_vector)`) — this scales to hundreds of thousands of rows per site without new infrastructure, and the tech-decisions table (§2) already flags JSONB as "GIN-indexable" for exactly this reason. Only reach for an external engine (Elasticsearch/Meilisearch/Algolia) if the actual need turns out to be fuzzy/typo-tolerant matching, faceted search, or millions of documents — don't default to it. |
+| XSS sanitization of `content` (JSONB, free-form) | Never, by design, unless a future feature lets one user's content render inside another user's trust context (e.g. cross-site embeds, shared admin views). Rationale: the only writer of `content` for a given site is its own authenticated owner (`POST/PATCH /cms/sites/{id}/...`) — there is no untrusted third-party writer, so backend-side sanitization would be defending against a self-XSS scenario with no real attacker. Sanitization is the consuming frontend's responsibility, applied at render time (see immediately below for the Markdown case, which already gets this for free). |
+| Markdown-formatted content (e.g. a blog with code snippets) | Already supported today with zero backend changes — `content.body` (or any field) is stored as a plain string; the backend never parses or interprets it (AGENTS.md rule). The consuming frontend is expected to run a Markdown parser (marked.js, remark, markdown-it) client-side and a syntax highlighter (Prism.js, highlight.js, Shiki) over fenced code blocks. This is also why sanitization stays frontend-side (row above): mainstream Markdown parsers escape raw HTML by default unless the frontend explicitly opts into `dangerouslySetInnerHTML`/`sanitize: false` — the format itself is a natural XSS mitigation layer as long as the frontend doesn't bypass it. |
 
 ### JWT claims — userId + roles embedded, no DB round-trip per request
 

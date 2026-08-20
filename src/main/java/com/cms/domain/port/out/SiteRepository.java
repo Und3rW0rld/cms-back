@@ -1,6 +1,7 @@
 package com.cms.domain.port.out;
 
 import com.cms.domain.model.site.Site;
+import com.cms.domain.model.site.SiteWithPublicationState;
 
 import java.util.List;
 import java.util.Optional;
@@ -15,4 +16,8 @@ public interface SiteRepository {
     List<Site> findByOwner(Long ownerUserId);
 
     void deleteById(UUID id);
+
+    Optional<SiteWithPublicationState> findByIdWithPublicationState(UUID id);
+
+    List<SiteWithPublicationState> findByOwnerWithPublicationState(Long ownerUserId);
 }
