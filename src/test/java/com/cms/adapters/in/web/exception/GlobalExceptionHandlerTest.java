@@ -7,11 +7,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,6 +31,19 @@ class GlobalExceptionHandlerTest {
     @AfterEach
     void clearMdc() {
         MDC.clear();
+    }
+
+    @Test
+    void shouldReturn404ForNoResourceFoundException() {
+        ResponseEntity<ErrorResponseDTO> response = handler.handleNoResourceFound(
+                new NoResourceFoundException(HttpMethod.GET, "/not/found", "/path"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(404);
+        assertThat(response.getBody().error()).isEqualTo("NOT_FOUND");
+        assertThat(response.getBody().correlationId()).isEqualTo(TEST_CORRELATION_ID);
+        assertThat(response.getBody().fields()).isNull();
     }
 
     @Test

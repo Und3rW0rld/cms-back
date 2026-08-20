@@ -11,7 +11,7 @@ Code comments explain *why* (architecture decisions, non-obvious business rules)
 | File | Scope | Status |
 |---|---|---|
 | [auth.md](auth.md) | `/auth/**` — register, login | Implemented |
-| `cms-sites.md` | `/cms/sites/**` — CRUD + draft/publish | Not implemented |
+| [cms-sites.md](cms-sites.md) | `/cms/sites/**` — CRUD + draft/publish | CRUD implemented; draft/publish not yet |
 | `cms-entries.md` | `/cms/sites/{id}/entries/**` — CRUD + draft/publish | Not implemented |
 | `public.md` | `/public/**` — read published content | Not implemented |
 
