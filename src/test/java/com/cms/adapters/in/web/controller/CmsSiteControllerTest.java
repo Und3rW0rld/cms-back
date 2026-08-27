@@ -6,17 +6,12 @@ import com.cms.adapters.in.web.dto.request.PatchSiteRequestDTO;
 import com.cms.adapters.in.web.dto.response.SiteResponseDTO;
 import com.cms.domain.model.site.Site;
 import com.cms.domain.model.site.SiteWithPublicationState;
-import com.cms.domain.port.in.site.CreateSiteUseCase;
-import com.cms.domain.port.in.site.DeleteSiteCommand;
-import com.cms.domain.port.in.site.DeleteSiteUseCase;
-import com.cms.domain.port.in.site.GetSiteCommand;
-import com.cms.domain.port.in.site.GetSiteUseCase;
-import com.cms.domain.port.in.site.ListSitesUseCase;
-import com.cms.domain.port.in.site.PatchSiteUseCase;
+import com.cms.domain.port.in.site.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -83,7 +78,7 @@ class CmsSiteControllerTest {
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).hasSize(1);
-        assertThat(response.getBody().get(0).published()).isTrue();
+        assertThat(response.getBody().getFirst().published()).isTrue();
     }
 
     @Test
@@ -125,6 +120,6 @@ class CmsSiteControllerTest {
         ResponseEntity<Void> response = controller.delete(id, principal);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
-        org.mockito.Mockito.verify(deleteSiteUseCase).delete(new DeleteSiteCommand(id, 1L));
+        Mockito.verify(deleteSiteUseCase).delete(new DeleteSiteCommand(id, 1L));
     }
 }

@@ -24,13 +24,13 @@ import static org.mockito.Mockito.when;
 class GetSiteServiceTest {
 
     @Mock
-    private SiteRepository siteRepository;
+    private SiteOwnershipGuard siteOwnershipGuard;
 
     private GetSiteService service;
 
     @BeforeEach
     void setUp() {
-        service = new GetSiteService(siteRepository);
+        service = new GetSiteService(siteOwnershipGuard);
     }
 
     @Test
@@ -40,7 +40,7 @@ class GetSiteServiceTest {
         Site site = new Site(siteId, 1L, "My Portfolio", null, null, now, now);
         SiteWithPublicationState result = new SiteWithPublicationState(site, true);
 
-        when(siteRepository.findByIdWithPublicationState(siteId)).thenReturn(Optional.of(result));
+        when(siteOwnershipGuard.requireOwnershipSiteWithPublicationState(siteId, 1L)).thenReturn(result);
 
         SiteWithPublicationState found = service.getById(new GetSiteCommand(siteId, 1L));
 
@@ -51,7 +51,7 @@ class GetSiteServiceTest {
     @Test
     void shouldThrowNotFoundWhenSiteDoesNotExist() {
         UUID siteId = UUID.randomUUID();
-        when(siteRepository.findByIdWithPublicationState(siteId)).thenReturn(Optional.empty());
+        when(siteOwnershipGuard.requireOwnershipSiteWithPublicationState(siteId, 1L)).thenThrow(new NotFoundException("Site not found: " + siteId));
 
         assertThatThrownBy(() -> service.getById(new GetSiteCommand(siteId, 1L)))
                 .isInstanceOf(NotFoundException.class)
@@ -65,7 +65,7 @@ class GetSiteServiceTest {
         Site site = new Site(siteId, 1L, "My Portfolio", null, null, now, now);
         SiteWithPublicationState result = new SiteWithPublicationState(site, false);
 
-        when(siteRepository.findByIdWithPublicationState(siteId)).thenReturn(Optional.of(result));
+        when(siteOwnershipGuard.requireOwnershipSiteWithPublicationState(siteId, 2L)).thenThrow(new AccessDeniedException("You do not have access to this site"));
 
         assertThatThrownBy(() -> service.getById(new GetSiteCommand(siteId, 2L)))
                 .isInstanceOf(AccessDeniedException.class);

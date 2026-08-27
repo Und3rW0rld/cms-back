@@ -6,24 +6,20 @@ import com.cms.domain.port.in.site.GetSiteCommand;
 import com.cms.domain.port.in.site.GetSiteUseCase;
 import com.cms.domain.port.out.SiteRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class GetSiteService implements GetSiteUseCase {
 
-    private final SiteRepository siteRepository;
+    private final SiteOwnershipGuard siteOwnershipGuard;
 
     @Override
     public SiteWithPublicationState getById(GetSiteCommand command) {
-        SiteWithPublicationState result = siteRepository.findByIdWithPublicationState(command.siteId())
-                .orElseThrow(() -> new NotFoundException("Site not found: " + command.siteId()));
-
-        if (!result.site().ownerUserId().equals(command.requesterUserId())) {
-            throw new AccessDeniedException("You do not have access to this site");
-        }
-
-        return result;
+        log.debug("Getting site with id {} for user {}", command.siteId(), command.requesterUserId());
+        return siteOwnershipGuard.requireOwnershipSiteWithPublicationState(command.siteId(), command.requesterUserId());
     }
 }

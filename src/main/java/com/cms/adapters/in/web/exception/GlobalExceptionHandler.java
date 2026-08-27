@@ -1,12 +1,11 @@
 package com.cms.adapters.in.web.exception;
 
 import com.cms.adapters.config.filter.CorrelationIdFilter;
-import com.cms.domain.exception.ConflictException;
-import com.cms.domain.exception.NotFoundException;
-import com.cms.domain.exception.PreconditionFailedException;
+import com.cms.domain.exception.*;
 import com.cms.domain.shared.ContentTooLargeException;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -50,9 +49,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ContentTooLargeException.class)
     public ResponseEntity<ErrorResponseDTO> handleContentTooLarge(ContentTooLargeException ex) {
         // ContentTooLargeException indicates domain-level validation failed (content > 1MB)
-        // Return the specific message from the domain exception
         return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
-                .body(ErrorResponseDTO.of(HttpStatus.CONTENT_TOO_LARGE.value(), ErrorCodes.PAYLOAD_TOO_LARGE, ex.getMessage(), correlationId()));
+                .body(ErrorResponseDTO.of(HttpStatus.CONTENT_TOO_LARGE.value(), ErrorCodes.CONTENT_TOO_LARGE, ex.getMessage(), correlationId()));
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)
@@ -60,7 +58,7 @@ public class GlobalExceptionHandler {
         // MaxUploadSizeExceededException indicates transport/HTTP layer limit was exceeded (> 2MB multipart upload)
         // Return a generic message since the actual size is not always available
         return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
-                .body(ErrorResponseDTO.of(HttpStatus.CONTENT_TOO_LARGE.value(), ErrorCodes.PAYLOAD_TOO_LARGE,
+                .body(ErrorResponseDTO.of(HttpStatus.CONTENT_TOO_LARGE.value(), ErrorCodes.CONTENT_TOO_LARGE,
                         "Request body exceeds the maximum allowed size (2MB)", correlationId()));
     }
 
@@ -93,6 +91,26 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ErrorResponseDTO.of(HttpStatus.INTERNAL_SERVER_ERROR.value(), ErrorCodes.INTERNAL_SERVER_ERROR,
                         "An unexpected error occurred", correlationId()));
+    }
+
+    @ExceptionHandler(ConversionException.class)
+    public ResponseEntity<ErrorResponseDTO> handleConversion(ConversionException ex) {
+        log.error("Conversion error occurred", ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ErrorResponseDTO.of(HttpStatus.INTERNAL_SERVER_ERROR.value(), ErrorCodes.INTERNAL_SERVER_ERROR,
+                        "Data conversion error occurred", correlationId()));
+    }
+
+    @ExceptionHandler(VersionMismatchException.class)
+    public ResponseEntity<ErrorResponseDTO> handleVersionMismatch(VersionMismatchException ex) {
+        return ResponseEntity.status(HttpStatus.PRECONDITION_FAILED)
+                .body(ErrorResponseDTO.of(HttpStatus.PRECONDITION_FAILED.value(), ErrorCodes.PRECONDITION_FAILED, ex.getMessage(), correlationId()));
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponseDTO> handleOptimisticLockingFailure(OptimisticLockingFailureException ex) {
+        return ResponseEntity.status(HttpStatus.PRECONDITION_FAILED)
+                .body(ErrorResponseDTO.of(HttpStatus.PRECONDITION_FAILED.value(), ErrorCodes.PRECONDITION_FAILED, "The resource was modified by another request", correlationId()));
     }
 
     private String correlationId() {

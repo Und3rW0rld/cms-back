@@ -9,7 +9,7 @@ public final class ErrorCodes {
     public static final String NOT_FOUND = "NOT_FOUND";
     public static final String CONFLICT = "CONFLICT";
     public static final String PRECONDITION_FAILED = "PRECONDITION_FAILED";
-    public static final String PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE";
+    public static final String CONTENT_TOO_LARGE = "CONTENT_TOO_LARGE";
     public static final String VALIDATION_ERROR = "VALIDATION_ERROR";
     public static final String FORBIDDEN = "FORBIDDEN";
     public static final String UNAUTHORIZED = "UNAUTHORIZED";

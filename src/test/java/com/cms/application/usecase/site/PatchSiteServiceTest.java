@@ -29,11 +29,14 @@ class PatchSiteServiceTest {
     @Mock
     private SiteRepository siteRepository;
 
+    @Mock
+    private SiteOwnershipGuard siteOwnershipGuard;
+
     private PatchSiteService service;
 
     @BeforeEach
     void setUp() {
-        service = new PatchSiteService(siteRepository);
+        service = new PatchSiteService(siteRepository, siteOwnershipGuard);
     }
 
     @Test
@@ -44,7 +47,7 @@ class PatchSiteServiceTest {
         Site existing = new Site(siteId, 1L, "Old Title", "Old Summary", "portfolio-v1", createdAt, updatedAt);
         SiteWithPublicationState current = new SiteWithPublicationState(existing, true);
 
-        when(siteRepository.findByIdWithPublicationState(siteId)).thenReturn(Optional.of(current));
+        when(siteOwnershipGuard.requireOwnershipSiteWithPublicationState(siteId, 1L)).thenReturn(current);
         when(siteRepository.save(any(Site.class))).thenAnswer(inv -> inv.getArgument(0));
 
         // Only title provided — summary and contentSchema should be preserved
@@ -68,7 +71,7 @@ class PatchSiteServiceTest {
     @Test
     void shouldThrowNotFoundWhenSiteDoesNotExist() {
         UUID siteId = UUID.randomUUID();
-        when(siteRepository.findByIdWithPublicationState(siteId)).thenReturn(Optional.empty());
+        when(siteOwnershipGuard.requireOwnershipSiteWithPublicationState(siteId, 1L)).thenThrow(new NotFoundException("Site not found: " + siteId));
 
         assertThatThrownBy(() -> service.patch(new PatchSiteCommand(siteId, 1L, "Title", null, null)))
                 .isInstanceOf(NotFoundException.class);
@@ -81,7 +84,7 @@ class PatchSiteServiceTest {
         Site existing = new Site(siteId, 1L, "Title", null, null, now, now);
         SiteWithPublicationState current = new SiteWithPublicationState(existing, false);
 
-        when(siteRepository.findByIdWithPublicationState(siteId)).thenReturn(Optional.of(current));
+        when(siteOwnershipGuard.requireOwnershipSiteWithPublicationState(siteId, 2L)).thenThrow(new AccessDeniedException("You do not have access to this site"));
 
         assertThatThrownBy(() -> service.patch(new PatchSiteCommand(siteId, 2L, "New Title", null, null)))
                 .isInstanceOf(AccessDeniedException.class);
