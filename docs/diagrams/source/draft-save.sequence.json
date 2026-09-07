@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "PUT draft — optimistic locking",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [920, 500],
+    "views": [
+      {
+        "id": "load-draft",
+        "label": "Load draft",
+        "focus": ["editor", "api", "guard", "db"],
+        "note": "GET returns content + version and the same number as ETag."
+      },
+      {
+        "id": "save-draft",
+        "label": "Save with If-Match",
+        "focus": ["editor", "api", "db"],
+        "note": "The server compares If-Match to site_drafts.version."
+      },
+      {
+        "id": "conflict",
+        "label": "412 conflict",
+        "focus": ["editor", "api"],
+        "note": "If another save won, the editor reloads the draft."
+      }
+    ]
+  },
+  "participants": [
+    { "id": "editor", "type": "frontend", "label": "CMS UI" },
+    { "id": "api", "type": "backend", "label": "Draft controller", "sublabel": "/cms/sites/{id}/draft" },
+    { "id": "guard", "type": "security", "label": "OwnershipGuard", "sublabel": "owner_user_id" },
+    { "id": "db", "type": "database", "label": "DB provider", "sublabel": "PostgreSQL · site_drafts" }
+  ],
+  "segments": [
+    { "from": 150, "to": 268, "label": "GET draft" },
+    { "from": 282, "to": 370, "label": "PUT If-Match" },
+    { "from": 384, "to": 417, "label": "Conflict" }
+  ],
+  "messages": [
+    { "id": "get-draft", "from": "editor", "to": "api", "y": 168, "label": "GET .../draft", "variant": "emphasis" },
+    { "id": "get-own", "from": "api", "to": "guard", "y": 200, "label": "requireOwnershipSite", "variant": "security" },
+    { "id": "get-row", "from": "api", "to": "db", "y": 232, "label": "SELECT site_drafts", "variant": "default" },
+    { "id": "get-200", "from": "api", "to": "editor", "y": 264, "label": "200 ETag \"3\"", "variant": "return" },
+    { "id": "put-draft", "from": "editor", "to": "api", "y": 296, "label": "PUT If-Match \"3\"", "variant": "emphasis" },
+    { "id": "cmp-ver", "from": "api", "to": "db", "y": 328, "label": "version == 3?", "variant": "emphasis" },
+    { "id": "put-200", "from": "api", "to": "editor", "y": 360, "label": "200 ETag \"4\"", "variant": "return" },
+    { "id": "put-stale", "from": "editor", "to": "api", "y": 388, "label": "PUT If-Match \"3\" stale", "variant": "default" },
+    { "id": "put-412", "from": "api", "to": "editor", "y": 416, "label": "412 Precondition Failed", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "api", "from": 168, "to": 268, "type": "backend" },
+    { "participant": "guard", "from": 196, "to": 220, "type": "security" },
+    { "participant": "db", "from": 228, "to": 248, "type": "database" },
+    { "participant": "api", "from": 296, "to": 368, "type": "backend" },
+    { "participant": "db", "from": 324, "to": 344, "type": "database" },
+    { "participant": "api", "from": 388, "to": 417, "type": "backend" }
+  ]
+}

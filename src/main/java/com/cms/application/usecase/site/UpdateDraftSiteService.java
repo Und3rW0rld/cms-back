@@ -7,10 +7,10 @@ import com.cms.domain.model.site.DraftSite;
 import com.cms.domain.port.in.site.UpdateDraftSiteCommand;
 import com.cms.domain.port.in.site.UpdateDraftSiteUseCase;
 import com.cms.domain.port.out.DraftSiteRepository;
-import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor

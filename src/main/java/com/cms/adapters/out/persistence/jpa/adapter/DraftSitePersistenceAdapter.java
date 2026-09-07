@@ -2,7 +2,6 @@ package com.cms.adapters.out.persistence.jpa.adapter;
 
 import com.cms.adapters.out.persistence.jpa.entity.DraftSiteJpaEntity;
 import com.cms.adapters.out.persistence.jpa.repository.DraftSiteJpaRepository;
-import com.cms.domain.exception.NotFoundException;
 import com.cms.domain.exception.VersionMismatchException;
 import com.cms.domain.model.site.Content;
 import com.cms.domain.model.site.DraftSite;

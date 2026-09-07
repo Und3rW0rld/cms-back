@@ -16,7 +16,7 @@ public record UpdateDraftSiteRequestDTO(
         )
         String content
 ) {
-        public UpdateDraftSiteCommand toCommand(UUID siteId, Long userId, long expectedVersion) {
+        public UpdateDraftSiteCommand toCommand(UUID siteId, long userId, long expectedVersion) {
                 return new UpdateDraftSiteCommand(siteId, userId, content, expectedVersion);
         }
 }

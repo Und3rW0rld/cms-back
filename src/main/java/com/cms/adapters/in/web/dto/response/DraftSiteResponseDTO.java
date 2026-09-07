@@ -11,6 +11,6 @@ public record DraftSiteResponseDTO(
         @Schema(name = "version", description = "Version number of the draft content, used for optimistic locking.", example = "1")
         long version,
         @Schema(name = "updatedAt", description = "Timestamp of the last update to the draft content.", example = "2024-06-01T12:00:00Z")
-        Instant updateAt
+        Instant updatedAt
 ) {
 }

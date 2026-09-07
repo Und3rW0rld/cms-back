@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Headless CMS — system map",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "cms-path",
+        "label": "CMS path",
+        "focus": ["cmsUi", "jwtFilter", "api", "db"],
+        "note": "The authenticated editor reaches /cms/** only after JWT verification."
+      },
+      {
+        "id": "public-path",
+        "label": "Public path",
+        "focus": ["publicFe", "api", "db"],
+        "note": "/public/** reads published rows only; no JWT."
+      },
+      {
+        "id": "identity",
+        "label": "Identity",
+        "focus": ["cmsUi", "jwtFilter", "api"],
+        "note": "/auth/** issues the token; the filter rebuilds CmsUserDetails from claims."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "cmsUi",
+      "type": "frontend",
+      "label": "CMS UI",
+      "sublabel": "Authenticated editor",
+      "tag": "ROLE_EDITOR",
+      "pos": [48, 120],
+      "size": [150, 68]
+    },
+    {
+      "id": "publicFe",
+      "type": "frontend",
+      "label": "Public frontend",
+      "sublabel": "Portfolio / blog",
+      "tag": "no auth",
+      "pos": [48, 380],
+      "size": [150, 68]
+    },
+    {
+      "id": "jwtFilter",
+      "type": "security",
+      "label": "JWT filter",
+      "sublabel": "JwtAuthenticationFilter",
+      "tag": "userId + roles",
+      "pos": [340, 120],
+      "size": [168, 68]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "cms-back",
+      "sublabel": "Spring Boot 4 · /api",
+      "tag": "hexagonal",
+      "pos": [620, 280],
+      "size": [168, 72]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "DB provider",
+      "sublabel": "PostgreSQL · JSONB + ltree",
+      "tag": "managed",
+      "pos": [900, 280],
+      "size": [176, 72]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Hexagonal API — adapters / application / domain",
+      "wraps": ["jwtFilter", "api"]
+    },
+    {
+      "kind": "security-group",
+      "label": "/cms/** Bearer JWT",
+      "wraps": ["jwtFilter"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "ui-auth",
+      "from": "cmsUi",
+      "to": "api",
+      "label": "POST /auth/**",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "id": "ui-jwt",
+      "from": "cmsUi",
+      "to": "jwtFilter",
+      "label": "Bearer JWT",
+      "variant": "emphasis"
+    },
+    {
+      "id": "jwt-cms",
+      "from": "jwtFilter",
+      "to": "api",
+      "label": "/cms/**",
+      "variant": "security",
+      "labelDy": -28
+    },
+    {
+      "id": "public-read",
+      "from": "publicFe",
+      "to": "api",
+      "label": "GET /public/**",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "api-sql",
+      "from": "api",
+      "to": "db",
+      "label": "SQL",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Consumers",
+      "items": [
+        "The CMS UI edits drafts and publishes with JWT",
+        "Each user's frontend reads /public/** with no authentication",
+        "/admin/** is reserved and does not exist yet"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Hexagonal core",
+      "items": [
+        "Controllers and JWT live in adapters/in",
+        "Use cases validate ownership; authentication is not enough",
+        "JSONB content is opaque to the backend"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Publication",
+      "items": [
+        "No status column: published = a *_published row exists",
+        "GET /public returns 404 when that row is absent",
+        "One PostgreSQL database: identity, ltree, and JSONB together"
+      ]
+    }
+  ]
+}
