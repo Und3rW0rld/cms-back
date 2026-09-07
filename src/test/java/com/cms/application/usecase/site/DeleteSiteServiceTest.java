@@ -27,11 +27,14 @@ class DeleteSiteServiceTest {
     @Mock
     private SiteRepository siteRepository;
 
+    @Mock
+    private SiteOwnershipGuard siteOwnershipGuard;
+
     private DeleteSiteService service;
 
     @BeforeEach
     void setUp() {
-        service = new DeleteSiteService(siteRepository);
+        service = new DeleteSiteService(siteRepository, siteOwnershipGuard);
     }
 
     @Test
@@ -40,7 +43,7 @@ class DeleteSiteServiceTest {
         Instant now = Instant.now();
         Site existing = new Site(siteId, 1L, "Title", null, null, now, now);
 
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(existing));
+        when(siteOwnershipGuard.requireOwnershipSite(siteId, 1L)).thenReturn(existing);
 
         service.delete(new DeleteSiteCommand(siteId, 1L));
 
@@ -50,7 +53,7 @@ class DeleteSiteServiceTest {
     @Test
     void shouldThrowNotFoundWhenSiteDoesNotExist() {
         UUID siteId = UUID.randomUUID();
-        when(siteRepository.findById(siteId)).thenReturn(Optional.empty());
+        when(siteOwnershipGuard.requireOwnershipSite(siteId, 1L)).thenThrow(new NotFoundException("Site not found: " + siteId));
 
         assertThatThrownBy(() -> service.delete(new DeleteSiteCommand(siteId, 1L)))
                 .isInstanceOf(NotFoundException.class);
@@ -61,10 +64,7 @@ class DeleteSiteServiceTest {
     @Test
     void shouldThrowAccessDeniedWhenRequesterIsNotOwnerAndNotDelete() {
         UUID siteId = UUID.randomUUID();
-        Instant now = Instant.now();
-        Site existing = new Site(siteId, 1L, "Title", null, null, now, now);
-
-        when(siteRepository.findById(siteId)).thenReturn(Optional.of(existing));
+        when(siteOwnershipGuard.requireOwnershipSite(siteId, 2L)).thenThrow(new AccessDeniedException("You do not have access to this site"));
 
         assertThatThrownBy(() -> service.delete(new DeleteSiteCommand(siteId, 2L)))
                 .isInstanceOf(AccessDeniedException.class);

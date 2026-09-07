@@ -1,8 +1,10 @@
 package com.cms.adapters.in.web.exception;
 
 import com.cms.domain.exception.ConflictException;
+import com.cms.domain.exception.ConversionException;
 import com.cms.domain.exception.NotFoundException;
 import com.cms.domain.exception.PreconditionFailedException;
+import com.cms.domain.shared.ContentTooLargeException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,8 +14,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.validation.MapBindingResult;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+import java.util.HashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -86,15 +92,15 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void shouldReturn422WithFieldErrorsForValidationException() throws Exception {
-        org.springframework.validation.MapBindingResult bindingResult =
-                new org.springframework.validation.MapBindingResult(new java.util.HashMap<>(), "target");
+        MapBindingResult bindingResult =
+                new MapBindingResult(new HashMap<>(), "target");
         bindingResult.rejectValue("title", "NotBlank", "must not be blank");
         bindingResult.rejectValue("summary", "Size", "must be at most 255 characters");
         MethodArgumentNotValidException ex = new MethodArgumentNotValidException(null, bindingResult);
 
         ResponseEntity<ErrorResponseDTO> response = handler.handleValidation(ex);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().status()).isEqualTo(422);
         assertThat(response.getBody().error()).isEqualTo("VALIDATION_ERROR");
@@ -169,12 +175,12 @@ class GlobalExceptionHandlerTest {
     @Test
     void shouldReturn413ForContentTooLargeException() {
         ResponseEntity<ErrorResponseDTO> response = handler.handleContentTooLarge(
-                new com.cms.domain.shared.ContentTooLargeException("Content exceeds 1MB limit"));
+                new ContentTooLargeException("Content exceeds 1MB limit"));
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONTENT_TOO_LARGE);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().status()).isEqualTo(413);
-        assertThat(response.getBody().error()).isEqualTo("PAYLOAD_TOO_LARGE");
+        assertThat(response.getBody().error()).isEqualTo("CONTENT_TOO_LARGE");
         assertThat(response.getBody().message()).isEqualTo("Content exceeds 1MB limit");
         assertThat(response.getBody().correlationId()).isEqualTo(TEST_CORRELATION_ID);
     }
@@ -182,13 +188,26 @@ class GlobalExceptionHandlerTest {
     @Test
     void shouldReturn413ForMaxUploadSizeExceededException() {
         ResponseEntity<ErrorResponseDTO> response = handler.handleMaxUploadSizeExceeded(
-                new org.springframework.web.multipart.MaxUploadSizeExceededException(2 * 1024 * 1024));
+                new MaxUploadSizeExceededException(2 * 1024 * 1024));
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONTENT_TOO_LARGE);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().status()).isEqualTo(413);
-        assertThat(response.getBody().error()).isEqualTo("PAYLOAD_TOO_LARGE");
+        assertThat(response.getBody().error()).isEqualTo("CONTENT_TOO_LARGE");
         assertThat(response.getBody().message()).isEqualTo("Request body exceeds the maximum allowed size (2MB)");
+        assertThat(response.getBody().correlationId()).isEqualTo(TEST_CORRELATION_ID);
+    }
+
+    @Test
+    void shouldReturn500ForConversionException() {
+        ResponseEntity<ErrorResponseDTO> response = handler.handleConversion(
+                new ConversionException("Data conversion error occurred"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(500);
+        assertThat(response.getBody().error()).isEqualTo("INTERNAL_SERVER_ERROR");
+        assertThat(response.getBody().message()).isEqualTo("Data conversion error occurred");
         assertThat(response.getBody().correlationId()).isEqualTo(TEST_CORRELATION_ID);
     }
 }

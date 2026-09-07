@@ -18,7 +18,7 @@ public record SiteResponseDTO(
         String summary,
 
         @Schema(description = "Frontend rendering hint — tells the consuming frontend which layout/schema "
-                + "version to render. Null if never set.", example = "portfolio-v1")
+                + "expectedVersion to render. Null if never set.", example = "portfolio-v1")
         String contentSchema,
 
         @Schema(description = "True if a site_published row exists for this site — publication state is "

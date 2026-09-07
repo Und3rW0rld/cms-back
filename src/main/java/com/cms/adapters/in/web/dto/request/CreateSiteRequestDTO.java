@@ -17,7 +17,7 @@ public record CreateSiteRequestDTO(
         String summary,
 
         @Schema(description = "Frontend rendering hint (e.g. \"portfolio-v1\"). The backend never interprets "
-                + "content structure — this value tells the consuming frontend which layout/schema version "
+                + "content structure — this value tells the consuming frontend which layout/schema expectedVersion "
                 + "to render. Changing it in production is a breaking change for deployed frontends.",
                 example = "portfolio-v1")
         @Size(max = 100, message = "Content schema must be at most 100 characters")

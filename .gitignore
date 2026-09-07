@@ -15,3 +15,7 @@ Thumbs.db
 
 # Local environment secrets — never commit
 .env
+
+# Archify delivery snapshots and visual-check sidecars
+docs/diagrams/.archify-delivery-*/
+docs/diagrams/*.visual-check.*

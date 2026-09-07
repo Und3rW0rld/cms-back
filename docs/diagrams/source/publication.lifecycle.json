@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Site — draft / publish lifecycle",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [980, 566],
+    "views": [
+      {
+        "id": "authoring-rail",
+        "label": "CMS rail",
+        "focus": ["created", "draft", "published"],
+        "note": "Every site is created with site_drafts; published is a separate row."
+      },
+      {
+        "id": "lock-conflict",
+        "label": "412 lock",
+        "focus": ["draft", "conflict"],
+        "note": "A 412 reloads the draft; it is not a terminal state."
+      },
+      {
+        "id": "unpublish-loop",
+        "label": "Unpublish",
+        "focus": ["published", "draft"],
+        "note": "Deleting site_published returns the site to draft-only."
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "main", "label": "CMS — authoring" },
+    { "id": "waiting", "label": "Optimistic lock" }
+  ],
+  "states": [
+    {
+      "id": "created",
+      "type": "start",
+      "label": "Created",
+      "sublabel": "POST /cms/sites",
+      "tag": "draft '{}'",
+      "step": "01",
+      "lane": "main",
+      "col": 0
+    },
+    {
+      "id": "draft",
+      "type": "active",
+      "label": "Draft",
+      "sublabel": "GET/PUT .../draft",
+      "tag": "If-Match",
+      "step": "02",
+      "lane": "main",
+      "col": 2
+    },
+    {
+      "id": "published",
+      "type": "success",
+      "label": "Published",
+      "sublabel": "site_published row exists",
+      "tag": "no status",
+      "step": "03",
+      "lane": "main",
+      "col": 4
+    },
+    {
+      "id": "conflict",
+      "type": "failure",
+      "label": "412 mismatch",
+      "sublabel": "reload ETag",
+      "tag": "recoverable",
+      "lane": "waiting",
+      "col": 0
+    }
+  ],
+  "transitions": [
+    {
+      "id": "save-conflict",
+      "from": "draft",
+      "to": "conflict",
+      "label": "If-Match ≠ version",
+      "variant": "security",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 48
+    },
+    {
+      "id": "reload-draft",
+      "from": "conflict",
+      "to": "draft",
+      "variant": "dashed",
+      "route": "left-channel"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Row = state",
+      "items": [
+        "Create inserts sites + site_drafts together; publish copies into site_published",
+        "Unpublish deletes the row; GET /public is 404 when it is absent"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "412 does not end the cycle",
+      "items": [
+        "A mismatch returns to Draft; the editor reuses the ETag from GET"
+      ]
+    }
+  ]
+}

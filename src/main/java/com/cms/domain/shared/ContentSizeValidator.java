@@ -1,8 +1,8 @@
 package com.cms.domain.shared;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.Map;
 
@@ -39,7 +39,7 @@ public final class ContentSizeValidator {
                         "Content size %d bytes exceeds the 1MB limit".formatted(bytes.length)
                 );
             }
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             log.error("Content serialization failed (likely a programming error)", e);
             throw new IllegalArgumentException(
                     "Content could not be serialized. This indicates a server-side issue, not a payload-too-large condition.",

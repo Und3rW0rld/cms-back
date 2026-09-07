@@ -2,6 +2,7 @@ package com.cms.application.usecase.site;
 
 import com.cms.domain.model.site.Site;
 import com.cms.domain.port.in.site.CreateSiteCommand;
+import com.cms.domain.port.out.DraftSiteRepository;
 import com.cms.domain.port.out.SiteRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,11 +25,14 @@ class CreateSiteServiceTest {
     @Mock
     private SiteRepository siteRepository;
 
+    @Mock
+    private DraftSiteRepository draftSiteRepository;
+
     private CreateSiteService service;
 
     @BeforeEach
     void setUp() {
-        service = new CreateSiteService(siteRepository);
+        service = new CreateSiteService(siteRepository, draftSiteRepository);
     }
 
     @Test
@@ -39,6 +43,7 @@ class CreateSiteServiceTest {
         Site saved = new Site(savedId, 1L, "My Portfolio", "A short summary", "portfolio-v1", now, now);
 
         when(siteRepository.save(any(Site.class))).thenReturn(saved);
+        when(draftSiteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         Site result = service.create(command);
 
@@ -52,5 +57,6 @@ class CreateSiteServiceTest {
         assertThat(toSave.contentSchema()).isEqualTo("portfolio-v1");
 
         assertThat(result).isEqualTo(saved);
+        verify(draftSiteRepository).save(any());
     }
 }
