@@ -35,6 +35,7 @@ public class SecurityConstants {
     public static final String TAG_AUTH = "auth";
     public static final String TAG_CMS_SITES = "cms-sites";
     public static final String TAG_CMS_DRAFTS = "cms-drafts";
+    public static final String TAG_CMS_PUBLISHED = "cms-published";
     public static final String TAG_CMS_ENTRIES = "cms-entries";
     public static final String TAG_PUBLIC = "public";
     public static final String TAG_ADMIN = "admin";

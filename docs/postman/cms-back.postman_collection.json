@@ -215,6 +215,34 @@
           ]
         },
         {
+          "name": "Publish Site",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/cms/sites/{{siteId}}/publish",
+              "host": ["{{baseUrl}}"],
+              "path": ["cms", "sites", "{{siteId}}", "publish"]
+            }
+          }
+        },
+        {
+          "name": "Unpublish Site",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/cms/sites/{{siteId}}/unpublish",
+              "host": ["{{baseUrl}}"],
+              "path": ["cms", "sites", "{{siteId}}", "unpublish"]
+            }
+          }
+        },
+        {
           "name": "Patch Site",
           "request": {
             "method": "PATCH",
